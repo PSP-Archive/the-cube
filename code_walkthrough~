@@ -1,0 +1,69 @@
+the_cube - code walkthrough
+
+Main
+main.c, main.h
+
+This contains the main function (entry point). The main function performs the following task:
+
+- Initializations
+- Create "screen" objects
+- Display splash screens
+- Set "Menu" as current screen
+- Enter main loop
+    - Call "controls" function for current screen
+    - Call "render" function for current screen
+- Dispose objects
+- Quit
+
+
+Menu (screen object)
+menu.c, menu.h
+
+The menu screen is the one that displays the main menu.
+
+controls function:
+- UP and DOWN on the APAD move the cursor up and down
+- CROSS select the item pointed by the cursor
+
+render function:
+- Renders a plasma in the background (2D)
+- Renders the menu with a wave effect (2D)
+- Renders the cursor (rotating star) (2D)
+- Renders the cube rotating slowly (3D)
+- Renders the logo (2D)
+
+Once a menu item is selected, the following tasks are performed:
+
+- New:
+    - starts a new game
+    - switch to game screen
+
+- Continue:
+    - switch to game screen
+    
+- Credits:
+    - switch to credits screen
+    
+- Quit:
+    - Exit of main loop    
+        
+
+Game (screen object)
+game.c, game.h
+
+
+
+Credits
+
+
+Camera
+
+Common
+
+Cube
+
+Music
+
+SFX
+
+Stats

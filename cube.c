@@ -1,0 +1,981 @@
+/*
+    cube.c
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+/************************************ INCLUDES ***************************************/
+
+#include <stdlib.h>
+#include <string.h>
+#include <pspgu.h>
+#include <pspgum.h>
+
+#include <stdlib.h>
+#include <time.h>
+#include <math.h>
+
+#include "cube.h"
+
+/************************************* DEFINES ***************************************/
+
+#define CUBE_SCALE  10.0    // Scale applied to unit piece (== desired piece size / 2)
+#define CURSOR_BLINK_COLOR  0xff0000ff
+#define CURSOR_BLINK_PERIOD  30
+
+#define STRUCT_COLOR  0xffffffff
+
+#define EPSILON 0.001
+
+/********************************* EXTERNAL VARS *************************************/
+
+extern unsigned char red_face_start[];
+extern unsigned char green_face_start[];
+extern unsigned char blue_face_start[];
+extern unsigned char orange_face_start[];
+extern unsigned char yellow_face_start[];
+extern unsigned char white_face_start[];
+extern unsigned char cursor_start[];
+
+/************************************* STATICS ***************************************/
+
+// Unit piece geometry (size 2x2x2, centered on 0, 0, 0) 
+static const TCNPVertex __attribute__((aligned(16))) unit_piece[24] =
+{/* TEXTURE    COLOR      NORMAL     POSITION    */
+// TOP
+    {{0, 0}, STRUCT_COLOR, {0, 1, 0}, {-1, 1.1,-1}}, // 0
+    {{1, 0}, STRUCT_COLOR, {0, 1, 0}, { 1, 1.1,-1}}, // 1
+    {{0, 1}, STRUCT_COLOR, {0, 1, 0}, {-1, 1.1, 1}}, // 3
+    {{1, 1}, STRUCT_COLOR, {0, 1, 0}, { 1, 1.1, 1}}, // 2
+
+// BOTTOM
+    {{0, 0}, STRUCT_COLOR, {0, -1, 0}, {-1,-1.1,-1}}, // 4
+    {{1, 0}, STRUCT_COLOR, {0, -1, 0}, {-1,-1.1, 1}}, // 7
+    {{0, 1}, STRUCT_COLOR, {0, -1, 0}, { 1,-1.1,-1}}, // 5
+    {{1, 1}, STRUCT_COLOR, {0, -1, 0}, { 1,-1.1, 1}}, // 6
+
+// LEFT
+    {{0, 0}, STRUCT_COLOR, {-1, 0, 0}, {-1.1,-1,-1}}, // 0
+    {{1, 0}, STRUCT_COLOR, {-1, 0, 0}, {-1.1, 1,-1}}, // 3
+    {{0, 1}, STRUCT_COLOR, {-1, 0, 0}, {-1.1,-1, 1}}, // 4
+    {{1, 1}, STRUCT_COLOR, {-1, 0, 0}, {-1.1, 1, 1}}, // 7
+
+// RIGHT
+    {{0, 0}, STRUCT_COLOR, {1, 0, 0}, {1.1,-1,-1}}, // 0
+    {{1, 0}, STRUCT_COLOR, {1, 0, 0}, {1.1,-1, 1}}, // 3
+    {{0, 1}, STRUCT_COLOR, {1, 0, 0}, {1.1, 1,-1}}, // 4
+    {{1, 1}, STRUCT_COLOR, {1, 0, 0}, {1.1, 1, 1}}, // 7
+
+// FRONT
+    {{0, 0}, STRUCT_COLOR, {0, 0, 1}, {-1,-1, 1.1}}, // 0
+    {{1, 0}, STRUCT_COLOR, {0, 0, 1}, {-1, 1, 1.1}}, // 4
+    {{0, 1}, STRUCT_COLOR, {0, 0, 1}, { 1,-1, 1.1}}, // 1
+    {{1, 1}, STRUCT_COLOR, {0, 0, 1}, { 1, 1, 1.1}}, // 5
+
+// BACK
+    {{0, 0}, STRUCT_COLOR, {0, 0, -1}, {-1,-1,-1.1}}, // 3
+    {{1, 0}, STRUCT_COLOR, {0, 0, -1}, { 1,-1,-1.1}}, // 2
+    {{0, 1}, STRUCT_COLOR, {0, 0, -1}, {-1, 1,-1.1}}, // 7
+    {{1, 1}, STRUCT_COLOR, {0, 0, -1}, { 1, 1,-1.1}}  // 6
+};
+
+static const CNPVertex __attribute__((aligned(16))) unit_struct[96] =
+{/*   COLOR      NORMAL     POSITION    */
+// TOP
+    {STRUCT_COLOR, {0, 1, -1}, {-1.05, 1.05,-1.05}}, // 0'
+    {STRUCT_COLOR, {0, 1, -1}, { 1.05, 1.05,-1.05}}, // 1'
+    {STRUCT_COLOR, {0, 1, -1}, {-1, 1.1,-1}},        // 0
+    {STRUCT_COLOR, {0, 1, -1}, { 1, 1.1,-1}},        // 1
+
+    {STRUCT_COLOR, {1, 1, 0}, { 1.05, 1.05,-1.05}},  // 1'
+    {STRUCT_COLOR, {1, 1, 0}, { 1.05, 1.05, 1.05}},  // 2'
+    {STRUCT_COLOR, {1, 1, 0}, { 1, 1.1,-1}},         // 1
+    {STRUCT_COLOR, {1, 1, 0}, { 1, 1.1, 1}},         // 2
+
+    {STRUCT_COLOR, {0, 1, 1}, { 1.05, 1.05, 1.05}},  // 2'
+    {STRUCT_COLOR, {0, 1, 1}, {-1.05, 1.05, 1.05}},  // 3'
+    {STRUCT_COLOR, {0, 1, 1}, { 1, 1.1, 1}},         // 2
+    {STRUCT_COLOR, {0, 1, 1}, {-1, 1.1, 1}},         // 3
+
+    {STRUCT_COLOR, {-1, 1, 0}, {-1.05, 1.05, 1.05}},  // 3'
+    {STRUCT_COLOR, {-1, 1, 0}, {-1.05, 1.05,-1.05}},  // 0'
+    {STRUCT_COLOR, {-1, 1, 0}, {-1, 1.1, 1}},         // 3
+    {STRUCT_COLOR, {-1, 1, 0}, {-1, 1.1,-1}},         // 0
+
+// BOTTOM
+    {STRUCT_COLOR, {-1, -1, 0}, {-1.05,-1.05,-1.05}}, // 4'
+    {STRUCT_COLOR, {-1, -1, 0}, {-1.05,-1.05, 1.05}}, // 7'
+    {STRUCT_COLOR, {-1, -1, 0}, {-1,-1.1,-1}},    // 4
+    {STRUCT_COLOR, {-1, -1, 0}, {-1,-1.1, 1}},    // 7
+
+    {STRUCT_COLOR, {0, -1, 1}, {-1.05,-1.05, 1.05}}, // 7'
+    {STRUCT_COLOR, {0, -1, 1}, { 1.05,-1.05, 1.05}}, // 6'
+    {STRUCT_COLOR, {0, -1, 1}, {-1,-1.1, 1}},    // 7
+    {STRUCT_COLOR, {0, -1, 1}, { 1,-1.1, 1}},    // 6
+
+    {STRUCT_COLOR, {1, -1, 0}, { 1.05,-1.05, 1.05}}, // 6'
+    {STRUCT_COLOR, {1, -1, 0}, { 1.05,-1.05,-1.05}}, // 5'
+    {STRUCT_COLOR, {1, -1, 0}, { 1,-1.1, 1}},    // 6
+    {STRUCT_COLOR, {1, -1, 0}, { 1,-1.1,-1}},    // 5
+
+    {STRUCT_COLOR, {0, -1, -1}, { 1.05,-1.05,-1.05}}, // 5'
+    {STRUCT_COLOR, {0, -1, -1}, {-1.05,-1.05,-1.05}}, // 4'
+    {STRUCT_COLOR, {0, -1, -1}, { 1,-1.1,-1}},    // 5
+    {STRUCT_COLOR, {0, -1, -1}, {-1,-1.1,-1}},    // 4
+
+// LEFT
+    {STRUCT_COLOR, {-1, 0, -1}, {-1.05,-1.05,-1.05}}, // 0'
+    {STRUCT_COLOR, {-1, 0, -1}, {-1.05, 1.05,-1.05}}, // 3'
+    {STRUCT_COLOR, {-1, 0, -1}, {-1.1,-1,-1}},    // 0
+    {STRUCT_COLOR, {-1, 0, -1}, {-1.1, 1,-1}},    // 3
+
+    {STRUCT_COLOR, {-1, 1, 0}, {-1.05, 1.05,-1.05}}, // 3'
+    {STRUCT_COLOR, {-1, 1, 0}, {-1.05, 1.05, 1.05}}, // 7'
+    {STRUCT_COLOR, {-1, 1, 0}, {-1.1, 1,-1}},    // 3
+    {STRUCT_COLOR, {-1, 1, 0}, {-1.1, 1, 1}},    // 7
+
+    {STRUCT_COLOR, {-1, 0, 1}, {-1.05, 1.05, 1.05}}, // 7'
+    {STRUCT_COLOR, {-1, 0, 1}, {-1.05,-1.05, 1.05}}, // 4'
+    {STRUCT_COLOR, {-1, 0, 1}, {-1.1, 1, 1}},    // 7
+    {STRUCT_COLOR, {-1, 0, 1}, {-1.1,-1, 1}},    // 4
+
+    {STRUCT_COLOR, {-1, -1, 0}, {-1.05,-1.05, 1.05}}, // 4'
+    {STRUCT_COLOR, {-1, -1, 0}, {-1.05,-1.05,-1.05}}, // 0'
+    {STRUCT_COLOR, {-1, -1, 0}, {-1.1,-1, 1}},    // 4
+    {STRUCT_COLOR, {-1, -1, 0}, {-1.1,-1,-1}},    // 0
+
+// RIGHT
+    {STRUCT_COLOR, {1, -1, 0}, {1.05,-1.05,-1.05}}, // 0'
+    {STRUCT_COLOR, {1, -1, 0}, {1.05,-1.05, 1.05}}, // 3'
+    {STRUCT_COLOR, {1, -1, 0}, {1.1,-1,-1}},    // 0
+    {STRUCT_COLOR, {1, -1, 0}, {1.1,-1, 1}},    // 3
+
+    {STRUCT_COLOR, {1, 0, 1}, {1.05,-1.05, 1.05}}, // 3'
+    {STRUCT_COLOR, {1, 0, 1}, {1.05, 1.05, 1.05}}, // 7'
+    {STRUCT_COLOR, {1, 0, 1}, {1.1,-1, 1}},    // 3
+    {STRUCT_COLOR, {1, 0, 1}, {1.1, 1, 1}},    // 7
+
+    {STRUCT_COLOR, {1, 1, 0}, {1.05, 1.05, 1.05}}, // 7'
+    {STRUCT_COLOR, {1, 1, 0}, {1.05, 1.05,-1.05}}, // 4'
+    {STRUCT_COLOR, {1, 1, 0}, {1.1, 1, 1}},    // 7
+    {STRUCT_COLOR, {1, 1, 0}, {1.1, 1,-1}},    // 4
+
+    {STRUCT_COLOR, {1, 0, -1}, {1.05, 1.05,-1.05}}, // 4'
+    {STRUCT_COLOR, {1, 0, -1}, {1.05,-1.05,-1.05}}, // 0'
+    {STRUCT_COLOR, {1, 0, -1}, {1.1, 1,-1}},    // 4
+    {STRUCT_COLOR, {1, 0, -1}, {1.1,-1,-1}},    // 0
+
+// FRONT
+    {STRUCT_COLOR, {-1, 0, 1}, {-1.05,-1.05, 1.05}}, // 0'
+    {STRUCT_COLOR, {-1, 0, 1}, {-1.05, 1.05, 1.05}}, // 4'
+    {STRUCT_COLOR, {-1, 0, 1}, {-1,-1, 1.1}},    // 0
+    {STRUCT_COLOR, {-1, 0, 1}, {-1, 1, 1.1}},    // 4
+
+    {STRUCT_COLOR, {0, 1, 1}, {-1.05, 1.05, 1.05}}, // 4'
+    {STRUCT_COLOR, {0, 1, 1}, { 1.05, 1.05, 1.05}}, // 5'
+    {STRUCT_COLOR, {0, 1, 1}, {-1, 1, 1.1}},    // 4
+    {STRUCT_COLOR, {0, 1, 1}, { 1, 1, 1.1}},    // 5
+
+    {STRUCT_COLOR, {1, 0, 1}, { 1.05, 1.05, 1.05}}, // 5'
+    {STRUCT_COLOR, {1, 0, 1}, { 1.05,-1.05, 1.05}}, // 1'
+    {STRUCT_COLOR, {1, 0, 1}, { 1, 1, 1.1}},    // 5
+    {STRUCT_COLOR, {1, 0, 1}, { 1,-1, 1.1}},    // 1
+
+    {STRUCT_COLOR, {0, -1, 1}, { 1.05,-1.05, 1.05}}, // 1'
+    {STRUCT_COLOR, {0, -1, 1}, {-1.05,-1.05, 1.05}}, // 0'
+    {STRUCT_COLOR, {0, -1, 1}, { 1,-1, 1.1}},    // 1
+    {STRUCT_COLOR, {0, -1, 1}, {-1,-1, 1.1}},    // 0
+
+// BACK
+    {STRUCT_COLOR, {0, -1, -1}, {-1.05,-1.05,-1.05}}, // 3'
+    {STRUCT_COLOR, {0, -1, -1}, { 1.05,-1.05,-1.05}}, // 2'
+    {STRUCT_COLOR, {0, -1, -1}, {-1,-1,-1.1}},    // 3
+    {STRUCT_COLOR, {0, -1, -1}, { 1,-1,-1.1}},    // 2
+
+    {STRUCT_COLOR, {1, 0, -1}, { 1.05,-1.05,-1.05}}, // 2'
+    {STRUCT_COLOR, {1, 0, -1}, { 1.05, 1.05,-1.05}}, // 6'
+    {STRUCT_COLOR, {1, 0, -1}, { 1,-1,-1.1}},    // 2
+    {STRUCT_COLOR, {1, 0, -1}, { 1, 1,-1.1}},    // 6
+
+    {STRUCT_COLOR, {0, 1, -1}, { 1.05, 1.05,-1.05}}, // 6'
+    {STRUCT_COLOR, {0, 1, -1}, {-1.05, 1.05,-1.05}}, // 7'
+    {STRUCT_COLOR, {0, 1, -1}, { 1, 1,-1.1}},    // 6
+    {STRUCT_COLOR, {0, 1, -1}, {-1, 1,-1.1}},    // 7
+
+    {STRUCT_COLOR, {-1, 0, -1}, {-1.05, 1.05,-1.05}}, // 7'
+    {STRUCT_COLOR, {-1, 0, -1}, {-1.05,-1.05,-1.05}}, // 3'
+    {STRUCT_COLOR, {-1, 0, -1}, {-1, 1,-1.1}},    // 7
+    {STRUCT_COLOR, {-1, 0, -1}, {-1,-1,-1.1}}     // 3
+};
+
+// Vertices offsets in the unit piece geometry array above
+static const int face_offsets[6] = {0, 4, 8, 12, 16, 20};
+static const int struct_offsets[6] = {0, 16, 32, 48, 64, 80};
+
+// Face spin axis (signed)
+static ScePspFVector3 spin_axis[9] = {{0, 1, 0},   // TOP
+                                      {0, -1, 0},  // BOTTOM
+                                      {-1, 0, 0},  // LEFT
+                                      {1, 0, 0},   // RIGHT
+                                      {0, 0, 1},   // FRONT
+                                      {0, 0, -1},  // BACK
+                                      {1, 0, 0},   // SLICEX = RIGHT
+                                      {0, 1, 0},   // SLICEY = TOP
+                                      {0, 0, 1}    // SLICEZ = FRONT
+                                     };
+
+// Colors assigned to faces
+static unsigned char *color_textures[6] = {white_face_start,
+                                           blue_face_start,
+                                           orange_face_start,
+                                           red_face_start,
+                                           green_face_start,
+                                           yellow_face_start};
+
+// Cube
+static cube_t cube;
+
+// Index of each pieces within a given face, [face_index][piece_index]
+static int face_pieces[9][9];
+
+static FACE_T gi_selected_face = CF_NONE;
+static float gf_spin_speed = 5.0f;
+static int gi_cursor_blink = 0, gi_cursor_counter = 0;
+
+static FACE_T gi_spinning_face = CF_NONE;
+static SPIN_T gi_spin_direction = SPIN_NONE;
+
+static FACE_T gi_rotation_axis = CF_NONE;
+static SPIN_T gi_rotation_direction = SPIN_NONE;
+
+static float gf_spin_angle = 0.0f;
+
+/********************************* LOCAL FUNCTIONS ***********************************/
+
+void tcnp_vertex_array_setcolor (TCNPVertex *dest, int dest_size, unsigned int color)
+{
+    int i;
+    
+    for (i = 0; i < dest_size; i++)
+    {
+        dest[i].color = color;
+    }
+}
+
+void cnp_vertex_array_setcolor (CNPVertex *dest, int dest_size, unsigned int color)
+{
+    int i;
+    
+    for (i = 0; i < dest_size; i++)
+    {
+        dest[i].color = color;
+    }
+}
+
+short round_to_short (float f)
+{
+    if (f < 0.0)
+        return (fabs(f - (short)f) < 0.5) ? ((short)f) : (((short)f) - 1); 
+    else
+        return (fabs(f - (short)f) < 0.5) ? ((short)f) : (((short)f) + 1); 
+}
+
+void cube_rotate_piece (piece_t *piece, FACE_T spinning_face, SPIN_T spin_direction)
+{
+    ScePspFMatrix4 m, result;
+    int i, j;
+
+    // Rotate geometry
+    ScePspFMatrix4 rot_matrix;
+    ScePspFVector3 rot_axis;
+    rot_axis = spin_axis[spinning_face];
+
+    if (spin_direction == SPIN_CCW)
+    {
+        rot_axis.x *= -GU_PI/2.0f;
+        rot_axis.y *= -GU_PI/2.0f;
+        rot_axis.z *= -GU_PI/2.0f;
+    }
+    else
+    {
+        rot_axis.x *= GU_PI/2.0f;
+        rot_axis.y *= GU_PI/2.0f;
+        rot_axis.z *= GU_PI/2.0f;
+    }
+    gumLoadIdentity (&rot_matrix);
+    gumRotateXYZ (&rot_matrix, &rot_axis);
+
+    // update piece postion
+    gumLoadIdentity (&m);
+    m.x.x = piece->position.x; 
+    m.y.x = piece->position.y; 
+    m.z.x = piece->position.z; 
+    
+    gumMultMatrix (&result, &m, &rot_matrix);   
+
+    // make sure there are no approximation drifts
+    piece->position.x = round_to_short (result.x.x); 
+    piece->position.y = round_to_short (result.y.x); 
+    piece->position.z = round_to_short (result.z.x);
+
+    // update geometry
+    for (i = 0; i < piece->nb_faces; i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            // position
+            gumLoadIdentity (&m);
+            m.x.x = piece->faces[i].vertices[j].position.x; 
+            m.y.x = piece->faces[i].vertices[j].position.y; 
+            m.z.x = piece->faces[i].vertices[j].position.z; 
+            
+            gumMultMatrix (&result, &m, &rot_matrix);   
+
+            piece->faces[i].vertices[j].position.x = result.x.x; 
+            piece->faces[i].vertices[j].position.y = result.y.x; 
+            piece->faces[i].vertices[j].position.z = result.z.x;             
+
+            // normal
+            gumLoadIdentity (&m);
+            m.x.x = piece->faces[i].vertices[j].normal.x; 
+            m.y.x = piece->faces[i].vertices[j].normal.y; 
+            m.z.x = piece->faces[i].vertices[j].normal.z; 
+            
+            gumMultMatrix (&result, &m, &rot_matrix);   
+
+            piece->faces[i].vertices[j].normal.x = result.x.x; 
+            piece->faces[i].vertices[j].normal.y = result.y.x; 
+            piece->faces[i].vertices[j].normal.z = result.z.x;             
+        }
+    }
+    for (i = 0; i < piece->nb_structs; i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            // position
+            gumLoadIdentity (&m);
+            m.x.x = piece->structs[i].vertices[j].position.x; 
+            m.y.x = piece->structs[i].vertices[j].position.y; 
+            m.z.x = piece->structs[i].vertices[j].position.z; 
+            
+            gumMultMatrix (&result, &m, &rot_matrix);   
+
+            piece->structs[i].vertices[j].position.x = result.x.x; 
+            piece->structs[i].vertices[j].position.y = result.y.x; 
+            piece->structs[i].vertices[j].position.z = result.z.x;             
+
+            // normal
+            gumLoadIdentity (&m);
+            m.x.x = piece->structs[i].vertices[j].normal.x; 
+            m.y.x = piece->structs[i].vertices[j].normal.y; 
+            m.z.x = piece->structs[i].vertices[j].normal.z; 
+            
+            gumMultMatrix (&result, &m, &rot_matrix);   
+
+            piece->structs[i].vertices[j].normal.x = result.x.x; 
+            piece->structs[i].vertices[j].normal.y = result.y.x; 
+            piece->structs[i].vertices[j].normal.z = result.z.x;             
+        }
+    }
+}
+
+void cube_update_faces (void)
+{
+    int i;
+    int nb_pieces[9];
+
+    memset (nb_pieces, 0, sizeof (int) * 9);
+
+    for (i = 0; i < 27; i++)
+    {
+        if (cube.pieces[i].position.z == 1)     // FRONT
+            face_pieces[CF_FRONT][nb_pieces[CF_FRONT]++] = i;
+
+        if (cube.pieces[i].position.z == -1)    // BACK
+            face_pieces[CF_BACK][nb_pieces[CF_BACK]++] = i;
+
+        if (cube.pieces[i].position.x == 1)     // RIGHT
+            face_pieces[CF_RIGHT][nb_pieces[CF_RIGHT]++] = i;
+
+        if (cube.pieces[i].position.x == -1)    // LEFT
+            face_pieces[CF_LEFT][nb_pieces[CF_LEFT]++] = i;
+
+        if (cube.pieces[i].position.y == 1)     // TOP
+            face_pieces[CF_TOP][nb_pieces[CF_TOP]++] = i;
+
+        if (cube.pieces[i].position.y == -1)    // BOTTOM
+            face_pieces[CF_BOTTOM][nb_pieces[CF_BOTTOM]++] = i;
+
+        if (cube.pieces[i].position.x == 0)    // SLICEX
+            face_pieces[CF_SLICEX][nb_pieces[CF_SLICEX]++] = i;
+
+        if (cube.pieces[i].position.y == 0)     // SLICEY
+            face_pieces[CF_SLICEY][nb_pieces[CF_SLICEY]++] = i;
+
+        if (cube.pieces[i].position.z == 0)    // SLICEZ
+            face_pieces[CF_SLICEZ][nb_pieces[CF_SLICEZ]++] = i;
+    }
+}
+
+// Init textured face geometry
+void cube_init_face (piece_t *piece, FACE_T face)
+{
+    // first, add the textured face
+    piece->faces = (face_t *)realloc (piece->faces, sizeof (face_t) * (piece->nb_faces + 1));
+    memcpy (&(piece->faces[piece->nb_faces].vertices), unit_piece + face_offsets[face], 4 * sizeof (TCNPVertex));
+    tcnp_vertex_array_setcolor (piece->faces[piece->nb_faces].vertices, 4, 0xffffffff);
+    piece->faces[piece->nb_faces].texture = color_textures[face];
+    piece->faces[piece->nb_faces].type = face;
+    piece->nb_faces++;
+
+    // then add the 4 non textured borders
+    piece->structs = (structure_t *)realloc (piece->structs, sizeof (structure_t) * (piece->nb_structs + 4));
+    memcpy (&(piece->structs[piece->nb_structs].vertices), unit_struct + struct_offsets[face], 4 * 4 * sizeof (CNPVertex));
+    cnp_vertex_array_setcolor (piece->structs[piece->nb_structs].vertices, 4 * 4, STRUCT_COLOR);
+    piece->nb_structs += 4;
+}
+
+// Init non textured struct geometry
+void cube_init_struct (piece_t *piece, FACE_T face)
+{
+    int i;
+
+    // init face (non textured)
+    piece->structs = (structure_t *)realloc (piece->structs, sizeof (structure_t) * (piece->nb_structs + 1));
+    // copy normal and position for all 4 vertices
+    for (i = 0; i < 4; i++)
+    {
+        memcpy (&(piece->structs[piece->nb_structs].vertices[i].position), &(unit_piece[face_offsets[face] + i].position), sizeof (ScePspFVector3));
+        memcpy (&(piece->structs[piece->nb_structs].vertices[i].normal), &(unit_piece[face_offsets[face] + i].normal), sizeof (ScePspFVector3));
+    } 
+    cnp_vertex_array_setcolor (piece->structs[piece->nb_structs].vertices, 4, STRUCT_COLOR);
+    piece->nb_structs++;
+
+    // then add the 4 non textured borders
+    piece->structs = (structure_t *)realloc (piece->structs, sizeof (structure_t) * (piece->nb_structs + 4));
+    memcpy (&(piece->structs[piece->nb_structs].vertices), unit_struct + struct_offsets[face], 4 * 4 * sizeof (CNPVertex));
+    cnp_vertex_array_setcolor (piece->structs[piece->nb_structs].vertices, 4 * 4, STRUCT_COLOR);
+    piece->nb_structs += 4;
+}
+
+// Init piece geometry (and index)
+void cube_init_piece (piece_t *piece)
+{
+    int i, j;
+
+    if (piece->position.z == 1)     // FRONT
+    {
+        cube_init_face (piece, CF_FRONT);
+    }
+    else
+    {
+        cube_init_struct (piece, CF_FRONT);
+    }
+
+    if (piece->position.z == -1)    // BACK
+    {
+        cube_init_face (piece, CF_BACK);
+    }
+    else
+    {
+        cube_init_struct (piece, CF_BACK);
+    }
+
+    if (piece->position.x == 1)     // RIGHT
+    {
+        cube_init_face (piece, CF_RIGHT);
+    }
+    else
+    {
+        cube_init_struct (piece, CF_RIGHT);
+    }
+
+    if (piece->position.x == -1)    // LEFT
+    {
+        cube_init_face (piece, CF_LEFT);
+    }
+    else
+    {
+        cube_init_struct (piece, CF_LEFT);
+    }
+
+    if (piece->position.y == 1)     // TOP
+    {
+        cube_init_face (piece, CF_TOP);
+    }
+    else
+    {
+        cube_init_struct (piece, CF_TOP);
+    }
+
+    if (piece->position.y == -1)    // BOTTOM
+    {
+        cube_init_face (piece, CF_BOTTOM);
+    }
+    else
+    {
+        cube_init_struct (piece, CF_BOTTOM);
+    }
+
+    // scale and move the vertices to their final place and size
+    for (i = 0; i < piece->nb_faces; i++)
+        for (j = 0; j < 4; j++)
+        {
+            // scale
+            piece->faces[i].vertices[j].position.x *= CUBE_SCALE / 2;
+            piece->faces[i].vertices[j].position.y *= CUBE_SCALE / 2;
+            piece->faces[i].vertices[j].position.z *= CUBE_SCALE / 2;
+
+            // move
+            piece->faces[i].vertices[j].position.x += piece->position.x * 1.1 * CUBE_SCALE;
+            piece->faces[i].vertices[j].position.y += piece->position.y * 1.1 * CUBE_SCALE;
+            piece->faces[i].vertices[j].position.z += piece->position.z * 1.1 * CUBE_SCALE;
+        }
+    for (i = 0; i < piece->nb_structs; i++)
+        for (j = 0; j < 4; j++)
+        {
+            // scale
+            piece->structs[i].vertices[j].position.x *= CUBE_SCALE / 2;
+            piece->structs[i].vertices[j].position.y *= CUBE_SCALE / 2;
+            piece->structs[i].vertices[j].position.z *= CUBE_SCALE / 2;
+
+            // move
+            piece->structs[i].vertices[j].position.x += piece->position.x * 1.1 * CUBE_SCALE;
+            piece->structs[i].vertices[j].position.y += piece->position.y * 1.1 * CUBE_SCALE;
+            piece->structs[i].vertices[j].position.z += piece->position.z * 1.1 * CUBE_SCALE;
+        }
+}
+
+int piece_is_spinning (int piece_index)
+{
+    int i;
+
+    for (i = 0; i < 9; i++)
+    {
+        if (piece_index == face_pieces[gi_spinning_face][i])
+            return -1;
+    }
+    return 0;
+}
+
+int piece_is_highlighted (int piece_index)
+{
+    int i;
+
+    if (gi_selected_face != CF_NONE)
+    {
+        for (i = 0; i < 9; i++)
+        {
+            if (piece_index == face_pieces[gi_selected_face][i])
+                return -1;
+        }
+    }
+    return 0;
+}
+
+int vectorEqual (ScePspFVector3 *op1, ScePspFVector3 *op2)
+{
+    return ((fabs (op1->x - op2->x) < EPSILON) &&
+            (fabs (op1->y - op2->y) < EPSILON) &&
+            (fabs (op1->z - op2->z) < EPSILON));
+}
+
+void serialize_face (serialized_face_t *serialized_face, face_t *face)
+{
+    serialized_face->type = face->type;
+    memcpy (serialized_face->vertices, face->vertices, 4 * sizeof (TCNPVertex));
+}
+
+void serialize_piece (piece_t *piece, serialized_piece_t *serialized_piece)
+{
+    int i;
+    
+    serialized_piece->nb_faces = piece->nb_faces;
+    serialized_piece->nb_structs = piece->nb_structs;
+    serialized_piece->position = piece->position;
+    memcpy (serialized_piece->structs, piece->structs, sizeof (structure_t) * piece->nb_structs);
+    for (i = 0; i < piece->nb_faces; i++)
+    {
+        serialize_face (serialized_piece->faces + i, piece->faces + i);
+    }    
+}
+
+void deserialize_face (face_t *face, serialized_face_t *serialized_face)
+{
+    face->type = serialized_face->type;
+    memcpy (face->vertices, serialized_face->vertices, 4 * sizeof (TCNPVertex));
+    face->texture = color_textures[face->type];
+}
+
+void deserialize_piece (serialized_piece_t *serialized_piece, piece_t *piece)
+{
+    int i;
+    
+    piece->nb_faces = serialized_piece->nb_faces;
+    piece->nb_structs = serialized_piece->nb_structs;
+    piece->position = serialized_piece->position;
+
+    piece->faces = (face_t *)malloc (sizeof (face_t) * piece->nb_faces);
+    piece->structs = (structure_t *)malloc (sizeof (structure_t) * piece->nb_structs);
+    memcpy (piece->structs, serialized_piece->structs, sizeof (structure_t) * piece->nb_structs);
+
+    for (i = 0; i < piece->nb_faces; i++)
+    {
+        deserialize_face (piece->faces + i, serialized_piece->faces + i);
+    }    
+}
+
+/******************************* EXPORTED FUNCTIONS **********************************/
+
+void cubeInit (void)
+{
+    int x ,y ,z ,i;
+
+    gi_selected_face = CF_NONE;
+    gi_cursor_counter = 0;
+    
+    // Init geometry
+    i = 0;
+    for (x = -1; x < 2; x++)
+        for (y = -1; y < 2; y++)
+            for (z = -1; z < 2; z++)
+            {
+                memset (cube.pieces + i, 0, sizeof (piece_t));
+                cube.pieces[i].position.x = x;
+                cube.pieces[i].position.y = y;
+                cube.pieces[i].position.z = z;
+                cube_init_piece (cube.pieces + i);
+                i++;
+            }
+    
+    // Init pieces per face array
+    cube_update_faces ();
+
+    // Cube geometry updated
+    sceKernelDcacheWritebackAll ();  
+}
+
+void cubeDispose (void)
+{
+    int i;
+
+    for (i = 0; i < 27; i++)
+    {
+        free (cube.pieces[i].structs);
+        free (cube.pieces[i].faces);
+    }    
+}
+
+void cubeApplySpin (FACE_T spinning_face, SPIN_T spin_direction)
+{
+    int i;
+
+    for (i = 0; i < 9; i++)
+    {
+        cube_rotate_piece (cube.pieces + face_pieces[spinning_face][i], spinning_face, spin_direction);
+    }    
+
+    // update faces after the spin
+    cube_update_faces ();
+    
+    // Cube geometry updated
+    sceKernelDcacheWritebackAll ();    
+}
+
+void cubeRender (void)
+{
+    int i, j;
+    float current_spin = 0.0;
+    ScePspFVector3 rot;
+
+    sceGuColorMaterial (GU_SPECULAR);
+    
+    // setup texture parameters
+    sceGuTexMode (GU_PSM_4444, 0, 0, 1);
+    sceGuTexFunc (GU_TFX_BLEND, GU_TCC_RGB);
+    sceGuTexFilter (GU_LINEAR, GU_LINEAR);
+    sceGuTexScale (1.0f, 1.0f);
+    sceGuTexOffset (0.0f, 0.0f);
+    sceGuTexEnvColor (0xffffffff);
+    sceGuColor (0x0);
+
+    // compute current spin vector only once
+    if (cubeIsSpinning ())
+    {
+        rot = spin_axis[gi_spinning_face];
+        if (gi_spin_direction == SPIN_CCW)
+        {
+            current_spin = gf_spin_angle * (GU_PI/180.0f);
+        }
+        else
+        {
+            current_spin = -gf_spin_angle * (GU_PI/180.0f);
+        }
+        rot.x *= current_spin;
+        rot.y *= current_spin;
+        rot.z *= current_spin;
+    }else if (cubeIsRotating ())
+    {
+        rot = spin_axis[gi_rotation_axis];
+        if (gi_rotation_direction == SPIN_CCW)
+        {
+            current_spin = gf_spin_angle * (GU_PI/180.0f);
+        }
+        else
+        {
+            current_spin = -gf_spin_angle * (GU_PI/180.0f);
+        }
+        rot.x *= current_spin;
+        rot.y *= current_spin;
+        rot.z *= current_spin;
+    }
+
+    // actually render cube, piece by piece
+    for (i = 0; i < 27; i++)
+    {
+        sceGumPushMatrix ();
+
+        // If this piece belongs to the currently spinning face
+        if (cubeIsRotating () || (cubeIsSpinning () && piece_is_spinning (i)))
+        {
+            // apply spin
+            sceGumRotateXYZ (&rot);
+        }
+
+        // Render textured vertices first
+        sceGuEnable (GU_TEXTURE_2D);
+
+        for (j = 0; j < cube.pieces[i].nb_faces; j++)
+        {
+            sceGuTexImage (0, 128, 128, 128, cube.pieces[i].faces[j].texture);
+
+            sceGumDrawArray (GU_TRIANGLE_STRIP, 
+                             TCNP_VERTEX_FORMAT | GU_TRANSFORM_3D,
+                             4,
+                             0,
+                             cube.pieces[i].faces[j].vertices);
+        }
+
+        // Render non textured vertices next
+        sceGuDisable (GU_TEXTURE_2D);
+
+        // render blinking cursor
+        if (piece_is_highlighted (i))
+        {
+            sceGuDisable (GU_LIGHTING);        // make the cursor more visible
+            //sceGuColor (gi_cursor_blink | 0xff000000);
+            sceGuColor (0xff0000ff);    // RED, make it F*CKING visible
+            
+            for (j = 0; j < cube.pieces[i].nb_structs; j++)
+            {
+                // replace color by a dummy texture so we can use the same geometry but without material color
+                sceGumDrawArray (GU_TRIANGLE_STRIP, 
+                                 GU_TEXTURE_16BIT | NP_VERTEX_FORMAT | GU_TRANSFORM_3D,
+                                 4,
+                                 0,
+                                 cube.pieces[i].structs[j].vertices);
+            }
+
+            // Restore GU
+            sceGuEnable (GU_LIGHTING);        
+            sceGuColor (0x0);
+        }
+        else
+        {    
+            for (j = 0; j < cube.pieces[i].nb_structs; j++)
+            {
+                sceGumDrawArray (GU_TRIANGLE_STRIP, 
+                                 CNP_VERTEX_FORMAT | GU_TRANSFORM_3D,
+                                 4,
+                                 0,
+                                 cube.pieces[i].structs[j].vertices);
+            }
+        }
+        sceGuEnable (GU_TEXTURE_2D);
+
+        sceGumPopMatrix ();
+    }
+}
+
+void cubeSetSpinSpeed (float speed)
+{
+    gf_spin_speed = speed;
+}
+
+void cubeUpdate (void)
+{
+    // update spinning angle
+    if (cubeIsSpinning ())
+    {
+        gf_spin_angle += gf_spin_speed;
+        if (gf_spin_angle > 90.0)
+        {
+            // If we are done spinning, actually apply the spin to the cube geometry
+            cubeApplySpin (gi_spinning_face, gi_spin_direction);
+
+            gi_spinning_face = CF_NONE;
+            gi_spin_direction = SPIN_NONE;
+        }    
+    }else if (cubeIsRotating ())
+    {
+        gf_spin_angle += gf_spin_speed;
+        if (gf_spin_angle > 90.0)
+        {
+            int direct_spin = gi_rotation_direction;
+            int indirect_spin = (gi_rotation_direction == SPIN_CW) ? SPIN_CCW : SPIN_CW;
+            
+            // If we are done rotating, actually apply the rotation to the cube geometry
+            switch (gi_rotation_axis)
+            {
+                case CF_FRONT:
+                    cubeApplySpin (CF_FRONT, direct_spin);
+                    cubeApplySpin (CF_SLICEZ, direct_spin);
+                    cubeApplySpin (CF_BACK, indirect_spin);
+                    break;
+
+                case CF_BACK:
+                    cubeApplySpin (CF_FRONT, indirect_spin);
+                    cubeApplySpin (CF_SLICEZ, indirect_spin);
+                    cubeApplySpin (CF_BACK, direct_spin);
+                    break;
+                
+                case CF_RIGHT:
+                    cubeApplySpin (CF_RIGHT, direct_spin);
+                    cubeApplySpin (CF_SLICEX, direct_spin);
+                    cubeApplySpin (CF_LEFT, indirect_spin);
+                    break;
+                    
+                case CF_LEFT:
+                    cubeApplySpin (CF_RIGHT, indirect_spin);
+                    cubeApplySpin (CF_SLICEX, indirect_spin);
+                    cubeApplySpin (CF_LEFT, direct_spin);
+                    break;
+                default:    // not gonna happen
+                    break;    
+            }    
+
+            gi_rotation_axis = CF_NONE;
+            gi_rotation_direction = SPIN_NONE;
+        }    
+    }    
+    
+    // update cursor highlighting
+    gi_cursor_counter ++;
+    gi_cursor_counter %= 128;
+    gi_cursor_blink = 255 - gi_cursor_counter;
+    //gi_cursor_blink = 0x00FF00;
+}
+
+void cubeSelectFace (FACE_T face)
+{
+    if (gi_selected_face != face)
+    {
+        gi_selected_face = face;
+        gi_cursor_counter = 0;
+    }    
+}
+
+int cubeRotate (FACE_T axis, SPIN_T direction)
+{
+    if (cubeIsSpinning () || cubeIsRotating ())
+        return -1;
+        
+    gi_rotation_axis = axis;
+    gi_rotation_direction = direction;
+    gf_spin_angle = 0.0;
+
+    return 0;
+}
+
+int cubeSpinFace (FACE_T face, SPIN_T direction)
+{
+    if (cubeIsSpinning () || cubeIsRotating ())
+        return -1;
+    
+    gi_spinning_face = face;
+    gi_spin_direction = direction;
+    gf_spin_angle = 0.0;
+
+    return 0;
+}
+
+int cubeIsRotating (void)
+{
+    return (gi_rotation_axis != CF_NONE);
+}
+
+int cubeIsSpinning (void)
+{
+    return (gi_spinning_face != CF_NONE);
+}
+
+int cubeIsSolved (void)
+{
+    int i, j, k;
+    int front_face;
+    
+    // Check each of the 6 faces
+    for (i = CF_TOP; i <= CF_BACK; i++)
+    {
+        front_face = CF_NONE;    
+        
+        // for each pieces of the face
+        for (j = 0; j < 9; j++)
+        {         
+            // look for the front face
+            for (k = 0; k < cube.pieces[face_pieces[i][j]].nb_faces; k++)
+            {
+                if (vectorEqual (&(spin_axis[i]), &(cube.pieces[face_pieces[i][j]].faces[k].vertices[0].normal)))
+                {
+                    if ((front_face != CF_NONE) && (front_face != cube.pieces[face_pieces[i][j]].faces[k].type))
+                        return 0;  // all face on the front are not the same -> cube unfinished
+                    front_face = cube.pieces[face_pieces[i][j]].faces[k].type;
+                    break;
+                }    
+            }
+            if (front_face == CF_NONE)  // not going to happen
+                return 0;
+        }
+    }
+    
+    return -1;
+}
+
+void cubeSerialize (serialized_cube_t *serialized_cube)
+{
+    int i;
+    
+    for (i = 0; i < 27; i++)
+    {
+        serialize_piece (cube.pieces + i, serialized_cube->pieces + i);
+    }
+}
+
+void cubeDeserialize (serialized_cube_t *serialized_cube)
+{
+    int i;
+    
+    for (i = 0; i < 27; i++)
+    {
+        deserialize_piece (serialized_cube->pieces + i, cube.pieces + i);
+    }
+    
+    // Init pieces per face array
+    cube_update_faces ();    
+}
+
+

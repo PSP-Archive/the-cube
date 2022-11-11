@@ -1,0 +1,61 @@
+/*
+    camera.h
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#ifndef _CAMERA_H
+#define _CAMERA_H
+
+#include <pspctrl.h>
+#include <stdlib.h>	
+#include <pspgum.h>
+#include <math.h>
+
+typedef struct s_cam
+{
+    ScePspFVector3 position;
+    ScePspFVector3 view;
+    ScePspFVector3 up_vector;
+    ScePspFVector3 strafe;
+}cam_t;    
+
+cam_t *cameraInit (void);
+void cameraDispose (cam_t *camera);
+
+// This changes the position, view, and up vector of the camera.
+void cameraPosition (cam_t *camera, ScePspFVector3 *vPosition, ScePspFVector3 *vView, ScePspFVector3 *vUpVector);
+
+// This rotates the camera's view around the position depending on the values passed in.
+void cameraRotateView (cam_t *camera, float angle, float X, float Y, float Z);
+
+// This rotates the camera around origin point (I.E. your character).
+void cameraRotateAroundOrigin (cam_t *camera, float theta, float phi);
+
+// This strafes the camera left or right depending on the speed (+/-) 
+void cameraStrafe (cam_t *camera, float speed);
+
+// This will move the camera forward or backward depending on the speed
+void cameraMove (cam_t *camera, float speed);
+
+// This uses sceGumLookAt() to tell PSP where to look
+void cameraLook (cam_t *camera);
+
+#endif
+
+

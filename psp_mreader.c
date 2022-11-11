@@ -1,0 +1,141 @@
+/*
+    psp_mreader.c
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+/************************************ INCLUDES ***************************************/
+
+#include <string.h>
+
+#include "psp_mreader.h"
+
+/************************************* DEFINES ***************************************/
+
+#define TRUE    -1
+#define FALSE   0
+
+/************************************* STATICS ***************************************/
+
+static unsigned char *start, *end;
+static long offset;
+
+/********************************* LOCAL FUNCTIONS ***********************************/
+
+BOOL psp_mreader_seek (struct MREADER *mreader, long n, int type)
+{
+    if (mreader == NULL)
+        return FALSE;
+        
+    switch (type)
+    {
+    case 0:
+        offset = n;
+        break;
+    case 1:
+        offset += n;
+        break;
+    case 2:
+        offset = (end - start) + n;
+        break;
+    default:
+        return FALSE;
+    }
+    return offset;    
+}
+
+long psp_mreader_tell (struct MREADER *mreader)
+{
+    if (mreader == NULL)
+        return -1;
+        
+    return offset;    
+}
+
+BOOL psp_mreader_read (struct MREADER *mreader, void *buffer, size_t n)
+{
+    long n_read;
+    
+    if (mreader == NULL)
+        return FALSE;
+    if (buffer == NULL)
+        return FALSE;
+
+    // n_read = remaining bytes
+    n_read = (end - start) - offset;
+
+    // if enough bytes left, read n bytes
+    if (n_read > n)
+        n_read = n;
+        
+    memcpy (buffer, start + offset, n_read);
+    offset += n_read;
+    
+    return n_read;  
+}
+
+int psp_mreader_get (struct MREADER *mreader)
+{
+    char value;
+    
+    if (mreader == NULL)
+        return FALSE;
+
+    if (offset < (end - start))
+    {
+        value = start[offset];
+        offset ++;
+     }
+     else
+        value = 0;   
+        
+    return (int)value;
+}
+
+BOOL psp_mreader_eof (struct MREADER *mreader)
+{
+    if (mreader == NULL)
+        return FALSE;
+    
+    return (offset == (end - start));
+}
+
+/******************************* EXPORTED FUNCTIONS **********************************/
+
+MREADER *psp_mreader_new (unsigned char *pc_mod_start, unsigned char *pc_mod_end)
+{
+    MREADER *new_mreader;
+    
+    new_mreader = (MREADER *) malloc (sizeof (MREADER));
+    new_mreader->Seek = psp_mreader_seek;
+    new_mreader->Tell = psp_mreader_tell;
+    new_mreader->Read = psp_mreader_read;
+    new_mreader->Get = psp_mreader_get;
+    new_mreader->Eof = psp_mreader_eof;
+    
+    start = pc_mod_start;
+    end = pc_mod_end;
+    offset = 0;
+    
+    return new_mreader;
+}
+
+void psp_mreader_free (MREADER *mreader)
+{
+    free (mreader);
+}
+

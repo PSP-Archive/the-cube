@@ -1,0 +1,120 @@
+/*
+    cube.h
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#ifndef _CUBE_H_
+#define _CUBE_H_
+
+#include "common.h"
+
+// define serialized cube
+#define MAX_NB_FACES    6
+#define MAX_NB_STRUCTS  30
+
+typedef enum
+{
+    SPIN_NONE,
+    SPIN_CCW,
+    SPIN_CW
+}SPIN_T;
+
+typedef enum
+{
+    CF_TOP,
+    CF_BOTTOM,
+    CF_LEFT,
+    CF_RIGHT,
+    CF_FRONT,
+    CF_BACK,
+    // misc 
+    CF_SLICEX,
+    CF_SLICEY,
+    CF_SLICEZ,
+    CF_NONE
+}FACE_T;
+
+typedef struct s_face
+{
+    TCNPVertex vertices[4];   // actual geometry of the face, textured
+    unsigned char *texture;   // texture buffer (ie. face color)
+    FACE_T type;              // type is only used for cube resolution
+}face_t;
+
+typedef struct s_structure
+{
+    CNPVertex vertices[4];    // actual geometry of the structure, non textured
+}structure_t;
+
+typedef struct s_piece
+{
+    face_t *faces;              // textured faces (up to 3)
+    int nb_faces;               // number of faces
+    structure_t *structs;       // piece structure, non textured
+    int nb_structs;             // number of structs
+    ScePspSVector3 position;    // Position of the piece in the cube
+}piece_t;
+
+typedef struct s_cube
+{
+    piece_t pieces[27];          // cube geometry
+}cube_t;
+
+typedef struct s_serialized_face
+{
+    TCNPVertex vertices[4];   // actual geometry of the face, textured
+    FACE_T type;              // type is only used for cube resolution
+}serialized_face_t;
+
+typedef struct s_serialized_structure
+{
+    CNPVertex vertices[4];    // actual geometry of the structure, non textured
+}serialized_structure_t;
+
+typedef struct s_serialized_piece
+{
+    int nb_faces;               // number of faces
+    int nb_structs;             // number of structs
+    ScePspSVector3 position;    // Position of the piece in the cube
+    serialized_face_t faces[MAX_NB_FACES];                // textured faces (up to 3)
+    serialized_structure_t structs[MAX_NB_STRUCTS];       // piece structure, non textured
+}serialized_piece_t;
+
+typedef struct s_serialized_cube
+{
+    serialized_piece_t pieces[27];
+}serialized_cube_t;
+
+void cubeInit (void);
+void cubeRender (void);
+int cubeRotate (void);
+void cubeApplySpin (FACE_T, SPIN_T);
+void cubeUpdate (void);
+void cubeSelectFace (FACE_T);
+int cubeSpinFace (FACE_T, SPIN_T);
+int cubeIsRotating (void);
+int cubeIsSpinning (void);
+int cubeIsSolved (void);
+int cubeSaveToFile (char *);
+void cubeDeserialize (serialized_cube_t *);
+void cubeSerialize (serialized_cube_t *);
+void cubeSetSpinSpeed (float);
+void cubeDispose (void);
+
+#endif //#ifndef _CUBE_H_

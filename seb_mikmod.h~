@@ -1,0 +1,18 @@
+/*
+    SEB MikMod encapsulation
+    seb_mikmod.h
+*/
+
+#ifndef _SEB_MIKMOD_H_
+#define _SEB_MIKMOD_H_
+
+#include <mikmod.h>
+
+#define true 1
+#define false 0
+
+int SMM_Init (void); 
+int SMM_PlayMOD (char *); 
+void SMM_Dispose (void); 
+
+#endif

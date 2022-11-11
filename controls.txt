@@ -1,0 +1,20 @@
+the_cube - controls
+
+1. View
+
+The view can be rotated using the APAD.
+- Move the APAD LEFT or RIGHT to rotate the cube around the Y axis (vertical).
+- Move the APAD UP or DOWN to move the camera and see the cube top or bottom.
+
+2. Cube manipulation
+
+Each slice of the cube can be spinned individually.
+- Use UP adnd DOWN on the DPAD to select slices from FRONT to BACK of the cube.
+- Use LEFT and RIGHT on the DPAD to select slices from LEFT to RIGHT of the cube.
+- Use TRIANGLE and CROSS to select slices from TOP to BOTTOM of the cube.
+- Use the SQUARE and CIRCLE buttons to spin the selected slice. The selected slice is the one that is glowing red.
+
+3. System
+- Press LEFT TRIGGER and RIGHT TRIGGER simultaneously to take a screenshot
+- Press START to go back to the main menu
+

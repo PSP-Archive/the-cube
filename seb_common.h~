@@ -1,0 +1,77 @@
+/*
+    SEB Common utilities and macros
+    seb_common.h
+*/
+
+#ifndef _SEB_COMMON_H_
+#define _SEB_COMMON_H_
+
+#include <pspkernel.h>
+#include <pspdebug.h>
+#include <pspdisplay.h>
+#include <psprtc.h>
+#include <pspctrl.h>
+#include <pspgu.h>
+#include <pspgum.h>
+
+#include "../common/callbacks.h"
+#include "../common/vram.h"
+
+#define BUF_WIDTH (512)
+#define SCR_WIDTH (480)
+#define SCR_HEIGHT (272)
+
+typedef struct
+{
+	ScePspFVector2 texture;
+	u32 color;
+	ScePspFVector3 normal;
+	ScePspFVector3 position;
+} TCNPVertex; // Texture, Color, Normal, Position
+#define TCNP_VERTEX_FORMAT (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_NORMAL_32BITF|GU_VERTEX_32BITF)
+
+typedef struct
+{
+	ScePspFVector2 texture;
+	u32 color;
+	ScePspFVector3 position;
+} TCPVertex; // Texture, Color, Position
+#define TCP_VERTEX_FORMAT (GU_TEXTURE_32BITF|GU_COLOR_8888|GU_VERTEX_32BITF)
+
+typedef struct
+{
+	ScePspFVector2 texture;
+	ScePspFVector3 position;
+} TPVertex; // Texture, Position
+#define TP_VERTEX_FORMAT (GU_TEXTURE_32BITF|GU_VERTEX_32BITF)
+
+typedef struct
+{
+	ScePspFVector3 normal;
+	ScePspFVector3 position;
+} NPVertex; // Normal, Position
+#define NP_VERTEX_FORMAT (GU_NORMAL_32BITF|GU_VERTEX_32BITF)
+
+typedef struct
+{
+	u32 color;
+	ScePspFVector3 position;
+} CPVertex; // Color, Position
+#define CP_VERTEX_FORMAT (GU_COLOR_8888|GU_VERTEX_32BITF)
+
+// global list, for every potential render function
+unsigned int __attribute__((aligned(16))) list[262144];
+// framebuffer pointers 
+void* fbp0;
+void* fbp1;
+void* zbp;
+
+// simple frame counter
+void SFC_Init (void);
+void SFC_UpdateFrameCounter (void);
+float SFC_GetCurrentFPS (void);
+// utility functions
+void SEB_WaitForKey (int);
+void SEB_OptimizedBlit (int sx, int sy, int sw, int sh, int dx, int dy, int slice);
+
+#endif

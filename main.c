@@ -1,0 +1,375 @@
+/* 
+    the_cube
+
+    main.c
+    
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+/************************************ INCLUDES ***************************************/
+
+#include <pspdisplay.h>
+#include <pspaudio.h>
+#include <pspctrl.h>
+
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <limits.h>
+#include <time.h>
+
+#include <pspgu.h>
+#include <pspgum.h>
+
+#include "main.h"
+#include "credits.h"
+#include "common.h"
+#include "music.h"
+#include "menu.h"
+#include "game.h"
+#include "stats.h"
+#include "sfx.h"
+
+#include "images/sebonpsp1.h"
+
+PSP_MODULE_INFO ("THE_CUBE", 0, 1, 1);
+PSP_MAIN_THREAD_ATTR (THREAD_ATTR_USER | THREAD_ATTR_VFPU);
+
+/************************************* STATICS ***************************************/
+
+static int gi_mode;     // that tells the main loop in which screens we are
+static int gi_quit;     // tells the main loop if we should quit or not
+static screen_t screens[NB_SCREENS];
+
+/********************************* LOCAL FUNCTIONS ***********************************/
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Function: splash_screen
+//
+//   Displays a bitmap on a colored background for 3 sec (interruptible with 'X')
+//   with fade in and fade out effect.
+//
+// Parameters:
+//   [in]unsigned char *img: pointer to the bitmap data. Must be a GU_PSM_8888, swizzled bitmap.
+//   [in]int dx:             destination x pos
+//   [in]int dy:             destination y pos
+//   [in]int w:              image width (actual texture size)
+//   [in]int h:              image height (actual texture size)
+//   [in]u32 bg_color:       destination background color
+//   [in]int duration:       duration of the splash screen (can be interrupted by pressing X)
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void splash_screen (unsigned char *img, int dx, int dy, int w, int h, u32 bg_color, int duration)
+{
+    SceCtrlData oldPad, pad;
+    int done = 0, frame_counter = 0;
+
+    // Init oldpad at 0 to avoid "stuck" keys
+    oldPad.Buttons = 0;
+
+    // start fade in effect
+    sfxSet (g_sfx_fade, 0, 255, 30, SFX_LINEAR, sfxProcessFade, NULL, NULL);
+    
+    // while we are not done and the app is still running
+    while ((!done || pad.Buttons != 0) && running ())
+    {
+        // read pad
+        if (sceCtrlPeekBufferPositive (&pad, 1))
+        {
+            // if a new keypress happens
+            if (pad.Buttons != oldPad.Buttons)
+            {
+                // and it's the cross key
+                if(pad.Buttons & PSP_CTRL_CROSS)
+                {
+                    // start the fade out effect and link it to the "done" variable
+                    // the variable will be set t true when the effect is done
+                    if (g_sfx_fade->completed)
+                        sfxSet (g_sfx_fade, 255, 0, 30, SFX_LINEAR, sfxProcessFade, sfxCompleteSetIntTrue, &done);
+                }
+            }
+            oldPad = pad;
+        }
+        // start rendering
+        sceGuStart (GU_DIRECT, list);
+        // clear screen
+        sceGuClearColor (bg_color);
+        sceGuClearDepth (0);
+        sceGuClear (GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+        // setup GU (no depth test and blending on)
+        sceGuDisable (GU_DEPTH_TEST);
+        sceGuBlendFunc (GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+        sceGuEnable (GU_BLEND);
+
+        // set the image texture, must be 32bits RGBA and swizzled
+        sceGuTexMode (GU_PSM_8888, 0, 0, 1);
+        sceGuTexImage (0, w, h, w, img);
+        sceGuTexFunc (GU_TFX_MODULATE, GU_TCC_RGBA);
+        sceGuTexFilter (GU_NEAREST, GU_NEAREST);
+
+        // blit it on the screen at the requested position in the requested color
+        blit (0, 0, w, h, dx, dy, 0xffffffff);
+        
+        // restore GU
+        sceGuDisable (GU_BLEND);
+        sceGuEnable (GU_DEPTH_TEST);
+
+        // if a fade is in progress, render it
+        // this call must come after everything else if we want to fade everything on screen
+        sfxProcess (g_sfx_fade);
+        
+        // rendering done
+        sceGuFinish ();
+        sceGuSync (0, 0);
+
+        // sync with screen refresh (60 Hz)
+        sceDisplayWaitVblankStart();
+        // swap buffers
+        fbp0 = sceGuSwapBuffers();
+
+        // Quit automatically after X s (+fade_in)
+        // (there are 60 frames per seconds)
+        if (frame_counter++ == 30 + duration * 60)
+            if (g_sfx_fade->completed)
+                sfxSet (g_sfx_fade, 255, 0, 30, SFX_LINEAR, sfxProcessFade, sfxCompleteSetIntTrue, &done);
+    }
+}
+ 
+/******************************* EXPORTED FUNCTIONS **********************************/
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Function: mainSetMode
+//
+//   Change the current game mode. Used to switch between menu , stats, credits or in-game.
+//
+// Parameters:
+//   [in]SCREEN_INDEX_T mode: new desired mode (the enum value defined in main.h)
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void mainSetMode (SCREEN_INDEX_T mode)
+{
+    if (gi_mode != NONE)
+    {
+        // call the leave callback for the previous mode
+        if (screens[gi_mode].OnLeave)
+            screens[gi_mode].OnLeave ();
+    }
+        
+    // set the new mode
+    gi_mode = mode;
+
+    // call the enter callback for the new mode
+    if (screens[gi_mode].OnEnter)
+        screens[gi_mode].OnEnter ();
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Function: mainQuit
+//
+//   Quit application cleanly (end current screen properly, then break out of main loop).
+//
+// Parameters: <none>
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void mainQuit (void)
+{
+    // call the leave callback for the previous mode
+    if (screens[gi_mode].OnLeave)
+        screens[gi_mode].OnLeave ();
+
+    // request main loop to quit
+    gi_quit = -1;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// Function: main
+//
+//   The program entry point. The program ends when this function ends.
+//
+// Parameters: <none>
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+int main (void) 
+{
+    int i;
+    
+    pspDebugScreenInit ();
+    setupCallbacks ();
+
+    sceCtrlSetSamplingCycle (0);
+    sceCtrlSetSamplingMode (PSP_CTRL_MODE_ANALOG);
+    oldPad.Buttons = 0;
+
+    // Init seed with current time
+    srand (time (NULL));
+
+    // Init music library
+    musicInit ();
+
+    // Create screens
+    memset (screens, 0, NB_SCREENS * sizeof (screen_t));
+    gameNew (screens + GAME);
+    menuNew (screens + MENU);
+    statsNew (screens + STATS);
+    creditsNew (screens + CREDITS);
+
+    g_sfx_fade = sfxNew ();
+    
+    // Init all screens
+    for (i = 0; i < NB_SCREENS; i++)
+        if (screens[i].Init) 
+            screens[i].Init ();
+        
+    // Setup GU (Global configuration for GU)
+    fbp0 = getStaticVramBuffer (BUF_WIDTH, SCR_HEIGHT, GU_PSM_8888);
+    fbp1 = getStaticVramBuffer (BUF_WIDTH, SCR_HEIGHT, GU_PSM_8888);
+    zbp = getStaticVramBuffer (BUF_WIDTH, SCR_HEIGHT, GU_PSM_4444);
+    rtp = getStaticVramBuffer (128, 128, GU_PSM_4444);
+
+    sceGuInit();
+
+    sceGuStart (GU_DIRECT, list);
+    sceGuDrawBuffer (GU_PSM_8888, fbp0, BUF_WIDTH);
+    sceGuDispBuffer (SCR_WIDTH, SCR_HEIGHT, fbp1, BUF_WIDTH);
+    sceGuDepthBuffer (zbp, BUF_WIDTH);
+    sceGuOffset (2048 - (SCR_WIDTH/2), 2048 - (SCR_HEIGHT/2));
+    sceGuViewport (2048, 2048, SCR_WIDTH, SCR_HEIGHT);
+    sceGuDepthRange (65535, 0);
+    sceGuScissor (0, 0, SCR_WIDTH, SCR_HEIGHT);
+    sceGuEnable (GU_SCISSOR_TEST);
+    sceGuFrontFace (GU_CW);
+    sceGuEnable (GU_TEXTURE_2D);
+    sceGuClear (GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    sceGuDepthFunc (GU_GEQUAL);
+    sceGuEnable (GU_DEPTH_TEST);
+    sceGuShadeModel (GU_SMOOTH);
+    sceGuEnable (GU_CULL_FACE);
+    sceGuEnable (GU_CLIP_PLANES);
+    sceGuEnable (GU_LIGHTING);
+    sceGuEnable (GU_LIGHT0);
+
+    ScePspFVector3 pos = { 70, 30, 70 };
+    sceGuLight (0, GU_POINTLIGHT, GU_DIFFUSE_AND_SPECULAR, &pos);
+    sceGuLightColor (0, GU_DIFFUSE, 0xffffffff);
+    sceGuLightColor (0, GU_SPECULAR, 0xffffffff);
+    sceGuSpecular (30.0f);
+    sceGuAmbient (0x0);
+
+    sceGuFinish ();
+    sceGuSync (0, 0);
+
+    sceDisplayWaitVblankStart ();
+    sceGuDisplay (GU_TRUE);
+    fbp0 = sceGuSwapBuffers();    
+    sceKernelDcacheWritebackAll ();
+ 
+    // display devsgen splashscreen, centered    
+    splash_screen ( devsgen_start,
+                    (480 - 256) / 2,
+                    (272 - 128) / 2,
+                    256,
+                    128,
+                    0xff808080,
+                    3);
+
+    // seb_on_psp logo, centered
+    splash_screen ( sebonpsp1_start,
+                    (480 - SEBONPSP1_TEXTURE_REAL_WIDTH) / 2,
+                    (272 - SEBONPSP1_TEXTURE_REAL_HEIGHT) / 2,
+                    SEBONPSP1_TEXTURE_WIDTH,
+                    SEBONPSP1_TEXTURE_HEIGHT,
+                    0xffffffff,
+                    3);
+
+    // display controls instruction
+    splash_screen ( controls_start,
+                    0,
+                    0,
+                    512,
+                    512,
+                    BG_COLOR,
+                    10);
+    
+    gi_quit = 0;
+    gi_mode = -1;
+  
+    sfxSet (g_sfx_fade, 0, 255, 30, SFX_LINEAR, sfxProcessFade, NULL, NULL);
+    mainSetMode (MENU);
+
+    while (running () && !gi_quit)
+    {
+        // Handle controls
+        if (sceCtrlPeekBufferPositive (&pad, 1))
+        {
+            // Screenshot
+            if (pad.Buttons != oldPad.Buttons)
+            {
+                if ((pad.Buttons & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) == (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER))
+                {
+                    screenshot ();
+                }
+            }
+            
+            // Call controls for active screen
+            if (screens[gi_mode].Controls)
+                screens[gi_mode].Controls ();
+
+            oldPad = pad;
+        }
+        
+        // Start GU list
+        sceGuStart (GU_DIRECT, list);
+        // Clear screen
+        sceGuClearColor (BG_COLOR);
+        sceGuClearDepth (0);
+        sceGuClear (GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+
+        // Render active screen
+        if (screens[gi_mode].Render)
+            screens[gi_mode].Render ();
+
+        sfxProcess (g_sfx_fade);
+                
+        // Sync list, wait VBL and swap buffers
+        sceGuFinish ();
+        sceGuSync (0, 0);
+        sceDisplayWaitVblankStart();
+        fbp0 = sceGuSwapBuffers();
+    }
+
+    // Free everything
+    for (i = 0; i < NB_SCREENS; i++)
+        if (screens[i].Dispose)
+            screens[i].Dispose ();
+
+    sfxFree (g_sfx_fade); 
+    musicDispose ();
+        
+    sceGuTerm ();
+    sceKernelExitGame ();
+
+    return 0;
+}
+

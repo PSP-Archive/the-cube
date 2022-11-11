@@ -1,0 +1,339 @@
+/*
+    credits.c
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+/************************************ INCLUDES ***************************************/
+
+#include <pspkernel.h>
+#include <pspdebug.h>
+#include <pspdisplay.h>
+#include <pspctrl.h>
+
+#include <string.h>
+#include <ctype.h>
+
+#include "main.h"
+#include "credits.h"
+#include "common.h"
+#include "music.h"
+#include "sfx.h"
+
+#include "images/sebonpsp2.h"
+
+/************************************* DEFINES ***************************************/
+
+#define END_OF_SCROLLTEXT   1400    // stop scrolling at 1400 pixels
+#define SCROLL_SPEED        0.2f
+
+/************************************ TYPEDEFS ***************************************/
+
+typedef struct line_s
+{
+    int base;           // base position in the total scroll (in pixel)
+    int offset;         // line number
+    char text[30];      // max characters per line
+}line_t;
+
+/************************************* STATICS ***************************************/
+
+// For synchronization purpose, we must have exactly 2min07s of text (duration of music).
+// 2min07s = 127s (at 60 fps) = 127*60 = 7620 frames at 1 lines every 5 frames (speed = 0.2)
+// that gives 1524 lines.
+
+static line_t credits_text[] = {
+                                {300, 0, "the_cube"},
+                                {400, 0, "code:"},
+                                {400, 1, "sebastien delestaing"},
+                                {500, 0, "music:"},
+                                {500, 1, "midnite feelin (menu)"},
+                                {500, 2, "djamm/eko"},
+                                {500, 3, "http://www.moonove.com"},
+                                {500, 5, "in heaven (credits)"},
+                                {500, 6, "djamm/eko"},
+                                {500, 7, "http://www.moonove.com"},
+                                {500, 9, "bel wazo (end)"},
+                                {500, 10, "djamm/eko"},
+                                {500, 11, "http://www.moonove.com"},
+                                {850, 0, "graphics:"},
+                                {850, 1, "sebastien delestaing"},
+                                {1000, 0, "thanks:"},
+                                {1000, 1, "http://www.ps2dev.org"},
+                                {1000, 2, "for the psp sdk"},
+                                {1000, 4, "http://www.devsgen.com"},
+                                {1000, 5, "forum for assistance"},
+                                {1200, 0, "...and laura"},
+                                {1200, 1, "for her patience"},
+                                {1200, 2, "and support"},
+                                {1500, 0, "copyright 2007"},
+                                {1500, 1, "sebastien delestaing"},
+                                {0, 0, ""}
+                               };
+static float scroll_ypos;    
+static int end_pause;                           
+
+/********************************* LOCAL FUNCTIONS ***********************************/
+
+static void on_enter (void)
+{
+    scroll_ypos = 0;
+    end_pause = 0;
+    sfxSet (g_sfx_fade, 0, 255, 30, SFX_LINEAR, sfxProcessFade, NULL, NULL);
+    musicPlayMODFromMemory (credits_mod_start, credits_mod_end);
+}
+
+static void on_leave (void)
+{
+    musicStop();
+}
+
+static void credits_done (sfx_t *sfx)
+{
+    sfxSet (g_sfx_fade, 0, 255, 30, SFX_LINEAR, sfxProcessFade, NULL, NULL);
+    mainSetMode (MENU);
+}
+
+static void controls (void)
+{
+    SceCtrlData pad;
+
+    if (scroll_ypos < END_OF_SCROLLTEXT)
+    {
+        scroll_ypos += SCROLL_SPEED;
+    }
+    else
+    {
+        // 4 sec after end of scroll, triggers end of credits
+        if (end_pause++ == 290)    
+            if (g_sfx_fade->completed)
+                sfxSet (g_sfx_fade, 255, 0, 30, SFX_LINEAR, sfxProcessFade, credits_done, NULL);
+    }
+
+    if (sceCtrlPeekBufferPositive (&pad, 1))
+    {
+        if (pad.Buttons != oldPad.Buttons)
+        {
+            if (pad.Buttons & PSP_CTRL_CIRCLE)
+            {
+                if (g_sfx_fade->completed)
+                    sfxSet (g_sfx_fade, 255, 0, 30, SFX_LINEAR, sfxProcessFade, credits_done, NULL);
+            }
+        }
+        oldPad = pad;
+    }
+}
+
+static void printAt (int x, int y, char *text, u32 color)
+{
+    int i;
+    int srcx, srcy;
+    int xoffset = x;
+    
+    for (i = 0; i < strlen (text); i++)
+    {
+        int font_xpos, font_ypos, letter_width;
+
+        switch (text[i])
+        {
+            case ' ':
+                xoffset += 8;
+                continue;
+                //break;
+            case '.':
+                letter_width = 9;
+                font_xpos = 7;
+                font_ypos = 2;
+                break;
+            case ':':
+                letter_width = 9;
+                font_xpos = 10;
+                font_ypos = 2;
+                break;
+            case '/':
+                letter_width = 12;
+                font_xpos = 2;
+                font_ypos = 2;
+                break;
+            case '(':
+                letter_width = 12;
+                font_xpos = 10;
+                font_ypos = 3;
+                break;
+            case ')':
+                letter_width = 12;
+                font_xpos = 11;
+                font_ypos = 3;
+                break;
+            default:
+                if (isalpha (text[i]))
+                {
+                    int c = toupper (text[i]);
+                    if (c < 'M')
+                    {
+                        font_xpos = c - 'A';
+                        font_ypos = 0;
+                    }
+                    else if (c < 'Y')
+                    {
+                        font_xpos = c - 'M';
+                        font_ypos = 1;
+                    }
+                    else
+                    {
+                        font_xpos = c - 'Y';
+                        font_ypos = 2;
+                    }
+                    if (c == 'I')
+                        letter_width = 9;
+                    else
+                        letter_width = 20;
+                }
+                else if (isdigit (text[i]))
+                {
+                    font_xpos = text[i] - '0';
+                    font_ypos = 3;
+                    if (text[i] == '1')
+                        letter_width = 9;
+                    else
+                        letter_width = 20;
+                }
+                else
+                {
+                    xoffset += 8;
+                    continue;
+                }
+        }
+
+        srcx = font_xpos * 21;
+        srcy = font_ypos * 24;
+
+        blit (srcx, srcy, letter_width, 24, xoffset, y, color);
+
+        xoffset += letter_width;
+    }
+}
+
+static void render (void)
+{
+    int i;
+
+    sceGuDisable (GU_DEPTH_TEST);
+    sceGuBlendFunc (GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+    sceGuEnable (GU_BLEND);
+    
+    // draw text
+    sceGuTexMode (GU_PSM_4444, 0, 0, 1);
+    sceGuTexImage (0, 256, 128, 256, font_start);
+    sceGuTexFunc (GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuTexFilter (GU_NEAREST, GU_NEAREST);
+
+    for (i = 0; credits_text[i].base; i++)
+    {
+        int ypos = credits_text[i].base + credits_text[i].offset * 22 - (int)scroll_ypos;
+        
+        if ((ypos > -20 - 4) && (ypos < 272))
+        {
+            printAt (0, ypos, credits_text[i].text, 0xffffffff);
+        }
+    }
+
+    // fade text
+    sceGuDisable (GU_TEXTURE_2D);
+
+    CPVertex *vertices = (CPVertex*) sceGuGetMemory (8 * sizeof(CPVertex));
+    u32 bgcolor = BG_COLOR;
+    
+    vertices[0].color = bgcolor;
+    vertices[0].position.x = 0;
+    vertices[0].position.y = 0;
+    vertices[0].position.z = 0;
+
+    vertices[1].color = bgcolor;
+    vertices[1].position.x = SCR_WIDTH;
+    vertices[1].position.y = 0;
+    vertices[1].position.z = 0;
+
+    vertices[2].color = 0x00ffffff & bgcolor;
+    vertices[2].position.x = 0;
+    vertices[2].position.y = 72;
+    vertices[2].position.z = 0;
+
+    vertices[3].color = 0x00ffffff & bgcolor;
+    vertices[3].position.x = SCR_WIDTH;
+    vertices[3].position.y = 72;
+    vertices[3].position.z = 0;
+
+    sceGumMatrixMode (GU_MODEL);
+    sceGumLoadIdentity ();
+
+    sceGuDrawArray (GU_TRIANGLE_STRIP, CP_VERTEX_FORMAT | GU_TRANSFORM_2D, 4, 0, vertices);
+
+    bgcolor = BG_COLOR;
+    
+    vertices[4].color = 0x00ffffff & bgcolor;
+    vertices[4].position.x = 0;
+    vertices[4].position.y = 200;
+    vertices[4].position.z = 0;
+
+    vertices[5].color = 0x00ffffff & bgcolor;
+    vertices[5].position.x = SCR_WIDTH;
+    vertices[5].position.y = 200;
+    vertices[5].position.z = 0;
+
+    vertices[6].color = bgcolor;
+    vertices[6].position.x = 0;
+    vertices[6].position.y = SCR_HEIGHT;
+    vertices[6].position.z = 0;
+
+    vertices[7].color = bgcolor;
+    vertices[7].position.x = SCR_WIDTH;
+    vertices[7].position.y = SCR_HEIGHT;
+    vertices[7].position.z = 0;
+
+    sceGumMatrixMode (GU_MODEL);
+    sceGumLoadIdentity ();
+
+    sceGuDrawArray (GU_TRIANGLE_STRIP, CP_VERTEX_FORMAT | GU_TRANSFORM_2D, 4, 0, vertices + 4);
+
+    sceGuEnable (GU_TEXTURE_2D);
+
+    // seb logo
+    sceGuTexMode (GU_PSM_8888, 0, 0, 1);
+    sceGuTexImage (0, SEBONPSP2_TEXTURE_WIDTH,
+                    SEBONPSP2_TEXTURE_HEIGHT, SEBONPSP2_TEXTURE_WIDTH, sebonpsp2_start);
+    sceGuTexFunc (GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuTexFilter (GU_NEAREST, GU_NEAREST);
+
+    blit (0, 0, SEBONPSP2_TEXTURE_WIDTH, SEBONPSP2_TEXTURE_HEIGHT, 480 - SEBONPSP2_TEXTURE_WIDTH,
+                    272 - SEBONPSP2_TEXTURE_REAL_HEIGHT, 0xffffffff);
+
+    sceGuEnable (GU_DEPTH_TEST);
+    sceGuDisable (GU_BLEND);
+}
+
+/******************************* EXPORTED FUNCTIONS **********************************/
+
+void creditsNew (screen_t *new)
+{
+    new->Render = render;
+    new->Controls = controls;
+    new->OnEnter = on_enter;
+    new->OnLeave = on_leave;
+}
+
+

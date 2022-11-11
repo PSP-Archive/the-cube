@@ -1,0 +1,9 @@
+/*
+    apad.h
+*/
+
+#include <pspkernel.h>
+#include <pspctrl.h>
+
+void apadInit (void);
+void apadDetectGesture (SceCtrlData *pad);

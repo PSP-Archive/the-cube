@@ -1,0 +1,172 @@
+/*
+    apad.c
+*/
+
+#include <pspdebug.h>
+
+#include <math.h>
+
+#include "apad.h"
+ 
+#define DEAD_ZONE   40
+#define ACTIVE_ZONE 100
+
+#define NB_POS_MAX  1000
+
+typedef struct s_pos
+{
+    int u, v;
+    float norm;
+    float angle;
+}pos_t;
+
+pos_t positions[NB_POS_MAX];
+static int index = 0;
+
+void apadInit (void)
+{
+}
+
+int apad_move_detected (void)
+{
+    int i, start, nb_points;
+    float delta_theta;
+    float mean_norm;
+    float mean_angle;               
+    float acc, stddev_norm;
+
+    // not enough points to detect anything
+    if (index < 2)
+    {
+            pspDebugScreenSetXY (0, 1); 
+        pspDebugScreenPrintf ("not enough points to detect anything\n");
+        return 0;
+    }
+    // discard points where the apad has not reached the active zone
+    for (i = 0; i < index; i++)
+        if (positions[i].norm > ACTIVE_ZONE)
+            break;
+
+    // not enough points in the active zone to detect anything
+    if (index - i < 2)
+    {
+            pspDebugScreenSetXY (0, 1); 
+        pspDebugScreenPrintf ("not enough points in the active zone to detect anything\n");
+        return 0;
+    }
+    start = i;
+
+    // compute delta theta
+    delta_theta = positions[index - 1].angle - positions[i].angle;
+
+    // angle is too small, nothing happened
+    if (delta_theta < M_PI / 4)
+    {
+        pspDebugScreenSetXY (0, 1); 
+        pspDebugScreenPrintf ("angle is too small, nothing happened\n");
+        return 0;
+    }
+
+    float mean_angular_speed = 0;
+    nb_points = 0;
+    for (; i < index - 1; i++)    
+    {
+        // check that norm never leaves the active zone
+        if (positions[i].norm < ACTIVE_ZONE)
+        {
+            pspDebugScreenSetXY (0, 1); 
+            pspDebugScreenPrintf ("norm left the active zone\n");
+            return 0;
+        }
+        // compute angular speed and check that it is reasonably constant
+        mean_angular_speed = positions[i + 1].angle - positions[i].angle;
+        if (delta_theta < 0 && mean_angular_speed > 0)
+        {
+            pspDebugScreenSetXY (0, 1); 
+            pspDebugScreenPrintf ("angular speed not constant\n");
+            return 0;
+        }
+        if (delta_theta > 0 && mean_angular_speed < 0)
+        {
+            pspDebugScreenSetXY (0, 1); 
+            pspDebugScreenPrintf ("angular speed not constant\n");
+            return 0;
+        }
+
+        nb_points++;
+    }
+    // speed of the movement
+    mean_angular_speed /= nb_points;
+
+    pspDebugScreenSetXY (0, 2); 
+    pspDebugScreenPrintf ("movement detected on %d points: speed %f, delta %f\n", nb_points, mean_angular_speed, delta_theta * 180.0 / M_PI);
+
+    return 1;
+/*    
+    // compute standard deviation for norm
+    // mean first
+    mean_norm = 0;
+    for (mean_norm = 0, nb_points = 0; i < index; i++, nb_points++)    
+    {
+        // check that norm never leaves the active zone
+        if (positions[i].norm < ACTIVE_ZONE)
+            return 0;
+        mean_norm += positions[i].norm;
+    }
+    mean_norm /= nb_points;
+
+    // then std dev
+    acc = 0;    
+    for (i = start; i < index; i++)    
+    {
+        acc += (positions[i].norm - mean_norm) * (positions[i].norm - mean_norm);
+    }
+    stddev_norm = sqrt (acc / nb_points);
+*/
+}
+
+int apadDetectGesture (SceCtrlData *pad)
+{
+    int u, v;
+    float theta;
+    float n;
+
+    // pad.Lx and pad.Ly are unsigned integer ranging from 0 to 256 (Lx: left to right, Ly: up to down)
+    u = pad->Lx - 128;
+    v = pad->Ly - 128;
+
+    // compute norm of the vector
+    n = sqrt (u * u + v * v);
+
+    pspDebugScreenSetXY (0, 0); 
+   // if the apad is centered, reset everything
+    if (n < DEAD_ZONE)
+    {
+        pspDebugScreenPrintf ("apad(%d, %d) in deadzone\n", u, v);
+        index = 0;
+        return 0;
+    }
+    pspDebugScreenPrintf ("apad(%d, %d): ", u, v);
+
+    // compute angle
+    if (v > 0)
+        theta = acos ((float)u / n);
+    else
+        theta = 2.0 * M_PI - acos ((float)u / n);
+
+    // store apad position
+    positions[index].u = u;
+    positions[index].v = v;
+    positions[index].norm = n;
+    positions[index].angle = theta;
+    index++;
+
+    if (index == NB_POS_MAX)
+    {
+        pspDebugScreenSetXY (0, 1); 
+      pspDebugScreenPrintf ("max index\n");
+       index = 0;
+    }
+
+    return apad_move_detected ();
+}

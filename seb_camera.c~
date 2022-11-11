@@ -1,0 +1,366 @@
+/*
+    seb_camera.c
+*/
+
+#include "seb_camera.h"
+
+// This is how fast our camera moves (in units/sec)
+#define kSpeed  100.0f
+
+ScePspFVector3 Substract (ScePspFVector3 vVector1, ScePspFVector3 vVector2);
+ScePspFVector3 Add (ScePspFVector3 vVector1, ScePspFVector3 vVector2);
+
+scam_t *SCAM_Init (void)
+{
+    scam_t *new;
+
+    ScePspFVector3 vZero = {0.0, 0.0, 0.0};       // Init a vVector to 0 0 0 for our position
+    ScePspFVector3 vView = {0.0, 1.0, 0.5};       // Init a starting view vVector (looking up and out the screen) 
+    ScePspFVector3 vUp   = {0.0, 0.0, 1.0};       // Init a standard up vVector (Rarely ever changes)
+
+    new = (scam_t *)malloc (sizeof (scam_t));
+    new->position = vZero;                    // Init the position to zero
+    new->view     = vView;                    // Init the view to a std starting view
+    new->up_vector = vUp;                     // Init the UpVector
+
+    return new;
+}
+
+void SCAM_Dispose (scam_t *camera)
+{
+    free (camera);
+}
+
+// This intializes the camera's sphere radius
+void SCAM_SetRadius(scam_t *camera, float radius)
+{
+    camera->radius = radius;
+}
+
+// This changes the position, view, and up vector of the camera.
+// This is primarily used for initialization
+void SCAM_Position (scam_t *camera, ScePspFVector3 *vPosition, ScePspFVector3 *vView, ScePspFVector3 *vUpVector)
+{
+    camera->position  = vPosition;                    // Assign the position
+    camera->view      = vView;                        // Assign the view
+    camera->up_vector = vUpVector;                    // Assign the up vector
+}
+
+/////////////////////////////// SET VIEW BY MOUSE \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This allows us to look around using the mouse, like in most first person games.
+/////
+///////////////////////////////// SET VIEW BY MOUSE \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_SetViewByPad (scam_t *camera, SceCtrlData pad)
+{
+    float angleY = 0.0f;                            // This is the direction for looking up or down
+    float angleZ = 0.0f;                            // This will be the value we need to rotate around the Y axis (Left and Right)
+
+    static float currentRotX = 0.0f;
+
+	const int zones[6] = {30, 70, 100, 112, 125, 130};
+	const float response[6] = {0.0f, 0.1f, 0.5f, 1.0f, 4.0f, 8.0f};
+    float direction;
+	int i, u, v;
+
+// non linear response
+	u = pad.Lx - 128;
+	if (u < 0)
+    {
+        direction = 1.0f;
+		u = -u;
+	}
+    else
+    {
+	    direction = -1.0f;
+	}
+	for (i = 0; i < 6; i++)
+    {
+        if (u < zones[i])
+        {
+		    u = response[i] * direction;
+            break;
+        }
+	}
+	v = pad.Ly - 128;
+	if (v < 0)
+    {
+        direction = 1.0f;
+		v = -v;
+	}
+    else
+    {
+	    direction = -1.0f;
+	}
+	for (i = 0; i < 6; i++)
+    {
+        if (v < zones[i])
+        {
+		    v = response[i] * direction;
+            break;
+        }
+	}
+
+    // Get the direction the pad moved in, but bring the number down to a reasonable amount
+    angleY = (float)u / 500.0f;        
+    angleZ = (float)v / 500.0f;        
+
+    // Here we keep track of the current rotation (for up and down) so that
+    // we can restrict the camera from doing a full 360 loop.
+    currentRotX -= angleZ;  
+
+    // If the current rotation (in radians) is greater than 1.0, we want to cap it.
+    if (currentRotX > 1.0f)
+        currentRotX = 1.0f;
+    // Check if the rotation is below -1.0, if so we want to make sure it doesn't continue
+    else if (currentRotX < -1.0f)
+        currentRotX = -1.0f;
+    // Otherwise, we can rotate the view around our position
+    else
+    {
+        // To find the axis we need to rotate around for up and down
+        // movements, we need to get a perpendicular vector from the
+        // camera's view vector and up vector.  This will be the axis.
+        ScePspFVector3 vAxis, vSub;
+        vSub = Substract (camera->view, camera->position);
+        gumCrossProduct (&vAxis, &vSub, &(camera->up_vector));
+        gumNormalize (&vAxis);
+
+        // Rotate around our perpendicular axis and along the y-axis
+        SCAM_RotateView (camera, angleZ, vAxis.x, vAxis.y, vAxis.z);
+        SCAM_RotateView (camera, angleY, 0, 1, 0);
+    }
+}
+
+
+///////////////////////////////// ROTATE VIEW \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This rotates the view around the position using an axis-angle rotation
+/////
+///////////////////////////////// ROTATE VIEW \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_RotateView (scam_t *camera, float angle, float x, float y, float z)
+{
+    ScePspFVector3 vNewView;
+
+    // Get the view vector (The direction we are facing)
+    ScePspFVector3 vView = Substract (camera->view, camera->position);     
+
+    // Calculate the sine and cosine of the angle once
+    float cosTheta = (float)cos (angle);
+    float sinTheta = (float)sin (angle);
+
+    // Find the new x position for the new rotated point
+    vNewView.x  = (cosTheta + (1 - cosTheta) * x * x)       * vView.x;
+    vNewView.x += ((1 - cosTheta) * x * y - z * sinTheta)   * vView.y;
+    vNewView.x += ((1 - cosTheta) * x * z + y * sinTheta)   * vView.z;
+
+    // Find the new y position for the new rotated point
+    vNewView.y  = ((1 - cosTheta) * x * y + z * sinTheta)   * vView.x;
+    vNewView.y += (cosTheta + (1 - cosTheta) * y * y)       * vView.y;
+    vNewView.y += ((1 - cosTheta) * y * z - x * sinTheta)   * vView.z;
+
+    // Find the new z position for the new rotated point
+    vNewView.z  = ((1 - cosTheta) * x * z - y * sinTheta)   * vView.x;
+    vNewView.z += ((1 - cosTheta) * y * z + x * sinTheta)   * vView.y;
+    vNewView.z += (cosTheta + (1 - cosTheta) * z * z)       * vView.z;
+
+    // Now we just add the newly rotated vector to our position to set
+    // our new rotated view of our camera.
+    camera->view = Add (camera->position, vNewView);
+}
+
+///////////////////////////////// ROTATE AROUND POINT \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////    This rotates the position around a given point
+/////
+///////////////////////////////// ROTATE AROUND POINT \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_RotateAroundPoint (scam_t *camera, ScePspFVector3 vCenter, float angle, float x, float y, float z)
+{
+    ScePspFVector3 vNewPosition;            
+
+    // To rotate our position around a point, what we need to do is find
+    // a vector from our position to the center point we will be rotating around.
+    // Once we get this vector, then we rotate it along the specified axis with
+    // the specified degree.  Finally the new vector is added center point that we
+    // rotated around (vCenter) to become our new position.  That's all it takes.
+
+    // Get the vVector from our position to the center we are rotating around
+    ScePspFVector3 vPos = Substract (camera->position, vCenter);
+
+    // Calculate the sine and cosine of the angle once
+    float cosTheta = (float)cos(angle);
+    float sinTheta = (float)sin(angle);
+
+    // Find the new x position for the new rotated point
+    vNewPosition.x  = (cosTheta + (1 - cosTheta) * x * x)        * vPos.x;
+    vNewPosition.x += ((1 - cosTheta) * x * y - z * sinTheta)    * vPos.y;
+    vNewPosition.x += ((1 - cosTheta) * x * z + y * sinTheta)    * vPos.z;
+
+    // Find the new y position for the new rotated point
+    vNewPosition.y  = ((1 - cosTheta) * x * y + z * sinTheta)    * vPos.x;
+    vNewPosition.y += (cosTheta + (1 - cosTheta) * y * y)        * vPos.y;
+    vNewPosition.y += ((1 - cosTheta) * y * z - x * sinTheta)    * vPos.z;
+
+    // Find the new z position for the new rotated point
+    vNewPosition.z  = ((1 - cosTheta) * x * z - y * sinTheta)    * vPos.x;
+    vNewPosition.z += ((1 - cosTheta) * y * z + x * sinTheta)    * vPos.y;
+    vNewPosition.z += (cosTheta + (1 - cosTheta) * z * z)        * vPos.z;
+
+    // Now we just add the newly rotated vector to our position to set
+    // our new rotated position of our camera.
+    camera->position = Add (vCenter, vNewPosition);
+}
+
+///////////////////////////////// STRAFE CAMERA \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This strafes the camera left and right depending on the speed (-/+)
+/////
+///////////////////////////////// STRAFE CAMERA \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_Strafe (scam_t *camera, float speed)
+{   
+    // Add the strafe vector to our position
+    camera->position.x += camera->strafe.x * speed;
+    camera->position.z += camera->strafe.z * speed;
+
+    // Add the strafe vector to our view
+    camera->view.x += camera->strafe.x * speed;
+    camera->view.z += camera->strafe.z * speed;
+}
+
+
+///////////////////////////////// MOVE CAMERA \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This will move the camera forward or backward depending on the speed
+/////
+///////////////////////////////// MOVE CAMERA \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_Move (scam_t *camera, float speed)
+{
+    // Get the current view vector (the direction we are looking)
+    ScePspFVector3 vVector = Substract (camera->view, camera->position);
+    gumNormalize (&vVector);
+
+    camera->position.x += vVector.x * speed;     // Add our acceleration to our position's X
+    camera->position.y += vVector.y * speed;     // Add our acceleration to our position's Y
+    camera->position.z += vVector.z * speed;     // Add our acceleration to our position's Z
+    camera->view.x += vVector.x * speed;         // Add our acceleration to our view's X
+    camera->view.y += vVector.y * speed;         // Add our acceleration to our view's Y
+    camera->view.z += vVector.z * speed;         // Add our acceleration to our view's Z
+}
+
+
+//////////////////////////// CHECK FOR MOVEMENT \\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This function handles the input faster than in the WinProc()
+/////
+//////////////////////////// CHECK FOR MOVEMENT \\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_CheckForMovement (scam_t *camera, SceCtrlData pad, float g_FrameInterval)
+{   
+    // Once we have the frame interval, we find the current speed
+    float speed = kSpeed * g_FrameInterval;
+
+    // Check if we hit the Up arrow
+    if (pad.Buttons & PSP_CTRL_UP)
+    {              
+       // Move our camera forward by a positive SPEED
+        SCAM_Move (camera, speed);              
+    }
+
+    // Check if we hit the Down arrow
+    if (pad.Buttons & PSP_CTRL_DOWN)
+    {            
+        // Move our camera backward by a negative SPEED
+        SCAM_Move (camera, -speed);             
+    }
+
+    // Check if we hit the Left arrow
+    if (pad.Buttons & PSP_CTRL_LEFT)
+    {
+        // Strafe the camera left
+        SCAM_Strafe (camera, -speed);
+    }
+
+    // Check if we hit the Right arrow
+    if (pad.Buttons & PSP_CTRL_RIGHT)
+    {
+        // Strafe the camera right
+        SCAM_Strafe (camera, speed);
+    }   
+}
+
+/////////////////////////////////////// MAGNITUDE \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This returns the magnitude of a vector
+/////
+/////////////////////////////////////// MAGNITUDE \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+float Magnitude (ScePspFVector3 vNormal)
+{
+    // Here is the equation:  magnitude = sqrt(V.x^2 + V.y^2 + V.z^2) : Where V is the vector
+    return (float)sqrt( (vNormal.x * vNormal.x) + 
+                        (vNormal.y * vNormal.y) + 
+                        (vNormal.z * vNormal.z) );
+}
+
+ScePspFVector3 Substract (ScePspFVector3 vVector1, ScePspFVector3 vVector2)
+{
+    ScePspFVector3 vSub;
+
+    vSub.x = vVector1.x - vVector2.x;
+    vSub.y = vVector1.y - vVector2.y;
+    vSub.z = vVector1.z - vVector2.z;
+
+    return vSub; 
+}
+
+ScePspFVector3 Add (ScePspFVector3 vVector1, ScePspFVector3 vVector2)
+{
+    ScePspFVector3 vSum;
+
+    vSum.x = vVector1.x + vVector2.x;
+    vSum.y = vVector1.y + vVector2.y;
+    vSum.z = vVector1.z + vVector2.z;
+
+    return vSum; 
+}
+
+///////////////////////////////// UPDATE \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This updates the camera's view and strafe vector
+/////
+///////////////////////////////// UPDATE \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_Update (scam_t *camera, SceCtrlData pad, float g_FrameInterval) 
+{
+    ScePspFVector3 vSub = Substract (camera->view, camera->position);
+    gumCrossProduct (&(camera->strafe), &vSub, &(camera->up_vector));
+
+    // Normalize the strafe vector
+    gumNormalize (&(camera->strafe));
+
+    // Move the camera's view by the mouse
+    SCAM_SetViewByPad (camera, pad);
+
+    // This checks to see if the keyboard was pressed
+    SCAM_CheckForMovement (camera, pad, g_FrameInterval);
+}
+
+///////////////////////////////// LOOK \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+/////
+/////   This updates the camera according to the 
+/////
+///////////////////////////////// LOOK \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*
+
+void SCAM_Look (scam_t *camera)
+{
+    // Give PSP our camera position, then camera view, then camera up vector
+    sceGumLookAt (&(camera->position),
+                  &(camera->view),
+                  &(camera->up_vector));
+}
+

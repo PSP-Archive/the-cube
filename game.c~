@@ -1,0 +1,1014 @@
+/*
+    game.c
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+/************************************ INCLUDES ***************************************/
+
+#include <pspdisplay.h>
+#include <pspctrl.h>
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+
+#include <pspgu.h>
+#include <pspgum.h>
+
+#include "main.h"
+#include "music.h"
+#include "common.h"
+#include "camera.h"
+#include "cube.h"
+#include "sfx.h"
+#include "stats.h"
+
+#include "game.h"
+
+/************************************* DEFINES ***************************************/
+
+#define DEAD_ZONE           30          // dead zone for the analog pad
+#define ANALOG_SENSIBILITY  40.0f       // analog pad sensibility (used for free move mode)
+#define FRICTION            0.9f        // used to slow down the cube rotation in free mode
+#define FRICTION_LIMIT      0.5f        // when below this limit, the rotation stops
+
+/************************************ TYPEDEFS ***************************************/
+
+typedef struct s_game_sav
+{
+    unsigned char header[4];
+    float duration;
+    int nb_moves;
+}
+game_sav_t;
+
+/********************************* EXTERNAL VARS *************************************/
+
+extern float gf_menu_cube_spin_y;
+
+/********************************** GLOBAL VARS **************************************/
+
+float gf_angular_speed_y, gf_cube_spin_x, gf_cube_spin_y, gf_cube_spin_z;
+sfx_t *sfx1, *sfx2;
+float gf_camera_phi, gf_camera_theta;
+cam_t *g_camera = NULL;
+int gi_game_in_progress = 0;
+
+/************************************* STATICS ***************************************/
+
+static int gi_spin_started;
+static int gi_current_cursor_axis, gi_current_cursor_pos;
+static int gi_show_osd = -1;
+
+// Some options to modify gameplay
+static int gi_free_move = 0, gi_locked_cursor = 0, gi_smart_spin = -1;
+
+static time_t game_duration, last_start_time;
+
+static FACE_T cursor_axis[5][3] = {{CF_FRONT, CF_SLICEZ, CF_BACK},
+                                   {CF_LEFT, CF_SLICEX, CF_RIGHT},
+                                   {CF_BACK, CF_SLICEZ, CF_FRONT},
+                                   {CF_RIGHT, CF_SLICEX, CF_LEFT},
+                                   {CF_BOTTOM, CF_SLICEY, CF_TOP}
+                                  };
+             
+static SPIN_T direct[9] = {SPIN_CW,     // TOP
+                           SPIN_CCW,    // BOTTOM
+                           SPIN_CCW,    // LEFT
+                           SPIN_CW,     // RIGHT
+                           SPIN_CW,     // FRONT
+                           SPIN_CCW,    // BACK
+                           SPIN_CW,     // SLICEX
+                           SPIN_CW,     // SLICEY
+                           SPIN_CW};    // SLICEZ
+                                  
+static SPIN_T indirect[9] = {SPIN_CCW,     // TOP
+                             SPIN_CW,      // BOTTOM
+                             SPIN_CW,      // LEFT
+                             SPIN_CCW,     // RIGHT
+                             SPIN_CCW,     // FRONT
+                             SPIN_CW,      // BACK
+                             SPIN_CCW,     // SLICEX
+                             SPIN_CCW,     // SLICEY
+                             SPIN_CCW};    // SLICEZ
+
+static sfx_t *sfx_cube = NULL;
+static int gi_cube_mix = -1;
+static int gi_controls_enabled;
+
+static int gi_msg_y;
+static char gpc_msg[61];    // 61 characters max (must fit on  screen, so 480 / 8)
+
+static sfx_t *sfx_stars = NULL;
+static int gi_stars_alpha;
+static int gi_stars_x, gi_stars_y;
+
+static sfx_t *sfx_message = NULL;
+static int gi_message_anim;
+
+static sfx_t *sfx_message2 = NULL;
+
+static float gf_saved_cube_spin_y = 0.0;
+
+/********************************* LOCAL FUNCTIONS ***********************************/
+
+// sfx callbacks ////////////
+void select_next_axis (sfx_t *sfx)
+{
+    if (gi_current_cursor_axis != 4)
+    {
+        gi_current_cursor_axis = (gi_current_cursor_axis + 1) % 4;
+    }    
+    cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+}
+
+void select_prev_axis (sfx_t *sfx)
+{
+    if (gi_current_cursor_axis != 4)
+    {
+        gi_current_cursor_axis--;
+        if (gi_current_cursor_axis == -1)
+            gi_current_cursor_axis = 3;
+    }    
+    cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+}
+
+void gen_stars (sfx_t *sfx)
+{
+    gi_stars_x = rand () % 480;
+    gi_stars_y = rand () % 272;
+    
+    sfxSet (sfx_stars, 255, 0, 60, SFX_LINEAR, sfxProcessSetInt, gen_stars, &gi_stars_alpha);
+}
+
+////////////////////////////
+
+void printEndMessage (int anim)
+{
+    int i, total_width, nb_letters;
+    int srcx[15], srcy[15], dstx[15], srcw[15];
+    float scale;
+    char text[15] = "cube complete!";
+
+    // pre-compute letter positions
+    total_width = 0;
+    nb_letters = 0;
+    for (i = 0; i < strlen (text); i++)
+    {
+        int font_xpos, font_ypos, letter_width;
+
+        switch (text[i])
+        {
+            case ' ':
+                total_width += 8;
+                continue;
+            case '.':
+                letter_width = 9;
+                font_xpos = 7;
+                font_ypos = 2;
+                break;
+            case '!':
+                letter_width = 9;
+                font_xpos = 11;
+                font_ypos = 2;
+                break;
+            case ':':
+                letter_width = 9;
+                font_xpos = 10;
+                font_ypos = 2;
+                break;
+            case '/':
+                letter_width = 12;
+                font_xpos = 2;
+                font_ypos = 2;
+                break;
+            default:
+                if (isalpha (text[i]))
+                {
+                    int c = toupper (text[i]);
+                    if (c < 'M')
+                    {
+                        font_xpos = c - 'A';
+                        font_ypos = 0;
+                    }
+                    else if (c < 'Y')
+                    {
+                        font_xpos = c - 'M';
+                        font_ypos = 1;
+                    }
+                    else
+                    {
+                        font_xpos = c - 'Y';
+                        font_ypos = 2;
+                    }
+                    if (c == 'I')
+                        letter_width = 9;
+                    else
+                        letter_width = 20;
+                }
+                else
+                {
+                    total_width += 8;
+                    continue;
+                }
+        }
+
+        srcx[nb_letters] = font_xpos * 21;
+        srcy[nb_letters] = font_ypos * 24;
+        dstx[nb_letters] = total_width;
+        srcw[nb_letters] = letter_width; 
+        total_width += letter_width;
+        nb_letters++;
+    }
+
+    // now blit
+    scale = 1.0f + ((float)anim / 16.0f) * ((float)anim / 16.0f) / 128.0f;
+    for (i = 0; i < nb_letters; i++)
+    {   u32 color;
+    
+        color = (255 - anim) << 24 | 0x00ffffff;
+        blitScale (srcx[i], srcy[i], srcw[i], 24, dstx[i] * scale  + (480 - total_width * scale) / 2, (272 - 24 * scale) / 2, scale, color);
+    }    
+}
+
+static void controls (void)
+{
+    int u, v;
+
+    // update cube
+    cubeUpdate ();
+    
+    // If we need to mix the cube
+    if (!cubeIsSpinning () && gi_cube_mix >= 0)  
+    {
+        // when done
+        if (gi_cube_mix == 0)
+        {
+            // Select top, speed normal
+            cubeSelectFace (CF_TOP);
+            cubeSetSpinSpeed (5.0f);
+
+            // hide message
+            sfxSet (sfx_message2, 262, 272, 10, SFX_LINEAR, sfxProcessSetInt, NULL, &gi_msg_y);
+
+            // Activate controls
+            gi_controls_enabled = -1;
+        }
+        else
+        {
+            // avoid user initiated spins
+            gi_controls_enabled = 0;
+            // keep the clock still while we are mixing the cube
+            last_start_time = time (NULL);
+            // Hide selection
+            cubeSelectFace (CF_NONE);
+
+            // spin randomly
+            cubeSpinFace (rand () % 9, SPIN_CW);
+        }
+        gi_cube_mix--;
+    }
+
+    if (gi_spin_started && !cubeIsSpinning () && !cubeIsRotating ())
+    {
+        // Cube is not spinning anymore
+        gi_spin_started = 0;
+        
+        // Check if cube is solved
+        if (cubeIsSolved ())
+        {
+            // Record stats: cube is complete
+            statsEvent (STAT_CUBE_COMPLETED);
+
+            // Compute final game duration, set game as not running, deselect face
+            game_duration += difftime (time (NULL), last_start_time);
+            gi_game_in_progress = 0;
+            gi_controls_enabled = 0;
+            cubeSelectFace (CF_NONE);
+            
+            // Enable free move
+            gi_free_move = -1;
+            gf_saved_cube_spin_y = gf_cube_spin_y;
+                        
+            // Show OSD at the end (to see the final time)
+            gi_show_osd = -1;
+
+            // Nice stars effect to reward the player
+            gen_stars (NULL);
+            
+            // Display a "cube complete" message
+            sfxSet (sfx_message, 255, 0, 60, SFX_LINEAR, sfxProcessSetInt, NULL, &gi_message_anim);
+
+            // display end msg
+            strcpy (gpc_msg, "press start to continue...");
+            sfxSet (sfx_message2, 272, 262, 10, SFX_LINEAR, sfxProcessSetInt, NULL, &gi_msg_y);
+                
+            // Play success music
+            musicPlayMODFromMemory (success_mod_start, success_mod_end);
+
+        }
+    }
+        
+    // pad.Lx and pad.Ly are unsigned integer ranging from 0 to 256 (Lx: left to right, Ly: up to down)
+    u = pad.Lx - 128;
+    v = pad.Ly - 128;
+
+    if (fabs (u) > DEAD_ZONE)
+    {
+        if (gi_free_move)
+        {
+            float new_speed;
+
+            new_speed = u / ANALOG_SENSIBILITY;
+            if (new_speed * gf_angular_speed_y >= 0.0)
+            {
+                if (fabs (gf_angular_speed_y) < fabs (new_speed))
+                    gf_angular_speed_y = new_speed;
+            }        
+        }
+        else
+        {
+            if (sfx_cube->completed)
+            {
+                if (gi_locked_cursor)
+                    cubeSelectFace (CF_NONE);
+                if (u > 0)
+                {
+                    if (gi_locked_cursor)
+                        sfxSet (sfx_cube, gf_cube_spin_y, gf_cube_spin_y + 90.0f, 30, SFX_LINEAR, sfxProcessSetFloat, select_next_axis, &gf_cube_spin_y);
+                    else    
+                        sfxSet (sfx_cube, gf_cube_spin_y, gf_cube_spin_y + 90.0f, 30, SFX_LINEAR, sfxProcessSetFloat, NULL, &gf_cube_spin_y);
+                }
+                else
+                {
+                    if (gi_locked_cursor)
+                        sfxSet (sfx_cube, gf_cube_spin_y, gf_cube_spin_y - 90.0f, 30, SFX_LINEAR, sfxProcessSetFloat, select_prev_axis, &gf_cube_spin_y);
+                    else
+                        sfxSet (sfx_cube, gf_cube_spin_y, gf_cube_spin_y - 90.0f, 30, SFX_LINEAR, sfxProcessSetFloat, NULL, &gf_cube_spin_y);
+                }
+            }    
+        }
+    }
+    else if (fabs (v) > DEAD_ZONE)
+    {
+        if (sfx1->completed)
+        {
+            if (g_camera->position.y < 0.0f && v > 0)
+            {
+                sfxSet (sfx1, 135, 45, 30, SFX_LINEAR, sfxProcessSetFloat, NULL, &gf_camera_phi);
+            }
+            else if (g_camera->position.y > 0.0f && v < 0)
+            {
+                sfxSet (sfx1, 45, 135, 30, SFX_LINEAR, sfxProcessSetFloat, NULL, &gf_camera_phi);
+            }       
+        }
+    }
+
+    // One shot controls
+    if (pad.Buttons != oldPad.Buttons)
+    {
+        if (gi_controls_enabled)
+        {
+            if(pad.Buttons & PSP_CTRL_DOWN)
+            {
+                int new_axis;
+                
+                // Select face on the left side of the screen (X axis)
+                if (gf_cube_spin_y < 45.0)
+                    new_axis = 0;
+                else if (gf_cube_spin_y < 135.0)
+                    new_axis = 1;
+                else if (gf_cube_spin_y < 225.0)
+                    new_axis = 2;
+                else if (gf_cube_spin_y < 315.0)
+                    new_axis = 3;
+                else    
+                    new_axis = 0;
+                
+                if (gi_current_cursor_axis != new_axis)
+                {   
+                    gi_current_cursor_axis = new_axis;
+                    gi_current_cursor_pos = 0;
+                }
+                else
+                {
+                    if (gi_current_cursor_pos > 0)
+                        gi_current_cursor_pos--;
+                    else
+                        gi_current_cursor_pos = 2;
+                }
+                cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+            }
+            if(pad.Buttons & PSP_CTRL_RIGHT)
+            {
+                int new_axis;
+
+                // Select face on the right side of the screen
+                if (gf_cube_spin_y < 45.0)
+                    new_axis = 3;
+                else if (gf_cube_spin_y < 135.0)
+                    new_axis = 0;
+                else if (gf_cube_spin_y < 225.0)
+                    new_axis = 1;
+                else if (gf_cube_spin_y < 315.0)
+                    new_axis = 2;
+                else    
+                    new_axis = 3;
+
+                if (gi_current_cursor_axis != new_axis)
+                {   
+                    gi_current_cursor_axis = new_axis;
+                    gi_current_cursor_pos = 0;
+                }
+                else
+                {    
+                    if (gi_current_cursor_pos > 0)
+                        gi_current_cursor_pos--;
+                    else
+                        gi_current_cursor_pos = 2;
+                }
+                cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+            }
+            
+            if(pad.Buttons & PSP_CTRL_UP)
+            {
+                int new_axis;
+                
+                // Select face on the left side of the screen (X axis)
+                if (gf_cube_spin_y < 45.0)
+                    new_axis = 0;
+                else if (gf_cube_spin_y < 135.0)
+                    new_axis = 1;
+                else if (gf_cube_spin_y < 225.0)
+                    new_axis = 2;
+                else if (gf_cube_spin_y < 315.0)
+                    new_axis = 3;
+                else    
+                    new_axis = 0;
+                
+                if (gi_current_cursor_axis != new_axis)
+                {   
+                    gi_current_cursor_axis = new_axis;
+                    gi_current_cursor_pos = 2;
+                }
+                else
+                {
+                    if (gi_current_cursor_pos < 2)
+                        gi_current_cursor_pos++;
+                    else    
+                        gi_current_cursor_pos = 0;
+                }
+                cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+            }
+            if(pad.Buttons & PSP_CTRL_LEFT)
+            {
+                int new_axis;
+
+                // Select face on the right side of the screen
+                if (gf_cube_spin_y < 45.0)
+                    new_axis = 3;
+                else if (gf_cube_spin_y < 135.0)
+                    new_axis = 0;
+                else if (gf_cube_spin_y < 225.0)
+                    new_axis = 1;
+                else if (gf_cube_spin_y < 315.0)
+                    new_axis = 2;
+                else    
+                    new_axis = 3;
+
+                if (gi_current_cursor_axis != new_axis)
+                {   
+                    gi_current_cursor_axis = new_axis;
+                    gi_current_cursor_pos = 2;
+                }
+                else
+                {
+                    if (gi_current_cursor_pos < 2)
+                        gi_current_cursor_pos++;
+                    else    
+                        gi_current_cursor_pos = 0;
+                }
+                cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+            }
+            if (pad.Buttons & PSP_CTRL_TRIANGLE)
+            {
+                if (gi_current_cursor_axis != 4)
+                {
+                    gi_current_cursor_axis = 4;
+                    gi_current_cursor_pos = 2;
+                }
+                else
+                {
+                    if (gi_current_cursor_pos < 2)
+                    {
+                        gi_current_cursor_pos++;
+                    }
+                }
+                cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+            }
+            if (pad.Buttons & PSP_CTRL_CROSS)
+            {
+                if (gi_current_cursor_axis != 4)
+                {
+                    gi_current_cursor_axis = 4;
+                    gi_current_cursor_pos = 0;
+                }
+                else
+                {
+                    if (gi_current_cursor_pos > 0)
+                    {
+                        gi_current_cursor_pos--;
+                    }
+                }
+                cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+            }
+                    
+            if (pad.Buttons & PSP_CTRL_SQUARE)
+            {
+                if (gi_smart_spin)
+                {
+                    switch (gi_current_cursor_axis)
+                    {
+                        case 4: // TOP-BOTTOM
+                            cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], direct[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            break;
+                        case 0: // FRONT-BACK
+                        case 2:
+                            if ((gf_cube_spin_y < 90.0f) || (gf_cube_spin_y > 270.0f))
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], indirect[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            else
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], direct[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            break;
+                        case 1: // LEFT-RIGHT
+                        case 3:
+                            if (gf_cube_spin_y < 180.0f)
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], direct[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            else
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], indirect[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            break;
+                    }
+                }
+                else
+                    cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], SPIN_CCW);
+                    
+                gi_spin_started = -1;
+            }
+            if (pad.Buttons & PSP_CTRL_CIRCLE)
+            {
+                if (gi_smart_spin)
+                {
+                    switch (gi_current_cursor_axis)
+                    {
+                        case 4: // TOP-BOTTOM
+                            cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], indirect[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            break;
+                        case 0: // FRONT-BACK
+                        case 2:
+                            if ((gf_cube_spin_y < 90.0f) || (gf_cube_spin_y > 270.0f))
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], direct[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            else
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], indirect[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            break;
+                        case 1: // LEFT-RIGHT
+                        case 3:
+                            if (gf_cube_spin_y < 180.0f)
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], indirect[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            else
+                                cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], direct[cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]]);
+                            break;
+                    }
+                }
+                else
+                    cubeSpinFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos], SPIN_CW);
+
+                gi_spin_started = -1;
+            }
+
+            if (pad.Buttons & PSP_CTRL_LTRIGGER)
+            {
+                int axis;
+                
+                // Select face on the right 
+                if (gf_cube_spin_y < 45.0)
+                    axis = 3;
+                else if (gf_cube_spin_y < 135.0)
+                    axis = 0;
+                else if (gf_cube_spin_y < 225.0)
+                    axis = 1;
+                else if (gf_cube_spin_y < 315.0)
+                    axis = 2;
+                else    
+                    axis = 3;                
+                    
+                cubeRotate (cursor_axis[axis][0], SPIN_CCW);
+
+                gi_spin_started = -1;
+            }
+
+            if (pad.Buttons & PSP_CTRL_RTRIGGER)
+            {
+                int axis;
+
+                // Select face on the front
+                if (gf_cube_spin_y < 45.0)
+                    axis = 0;
+                else if (gf_cube_spin_y < 135.0)
+                    axis = 1;
+                else if (gf_cube_spin_y < 225.0)
+                    axis = 2;
+                else if (gf_cube_spin_y < 315.0)
+                    axis = 3;
+                else    
+                    axis = 0;
+
+                cubeRotate (cursor_axis[axis][0], SPIN_CW);
+                
+                gi_spin_started = -1;
+            }
+            
+            if (pad.Buttons & PSP_CTRL_SELECT)
+            {
+                gi_show_osd = ~gi_show_osd;
+            }
+        }   // if (gi_control_enabled)
+        
+        // Menu key is only active when cube is not mixing
+        if ((pad.Buttons & PSP_CTRL_START) && (gi_cube_mix == -1))
+        {
+            sfxSet (sfx1, gf_cube_spin_y, gf_cube_spin_y - 50.0f, 30, SFX_LINEAR, sfxProcessSetFloat, NULL, &gf_menu_cube_spin_y);
+            sfxSet (sfx2, gf_camera_phi, 90.0f, 30, SFX_LINEAR, sfxProcessSetFloat, NULL, &gf_camera_phi);                                                        
+
+            if (gi_game_in_progress)
+            {
+                game_duration += difftime (time (NULL), last_start_time);
+            }
+            else
+            {
+                // Stop music
+                musicStop ();
+                
+                // hide stars and "cube complete" message
+                sfxStop (sfx_stars);
+                sfxStop (sfx_message);
+
+                // hide help message        
+                gi_msg_y = 272;
+                
+                gf_cube_spin_y = gf_saved_cube_spin_y;
+            }    
+
+            mainSetMode (MENU);
+        }
+    }
+}
+
+void rotation_update (void)
+{
+    gf_cube_spin_y += gf_angular_speed_y;
+    // Keep between 0 and 360 for face selection purpose
+    if (gf_cube_spin_y < 0.0)
+        gf_cube_spin_y += 360.0f;
+    if (gf_cube_spin_y > 360.0)
+        gf_cube_spin_y -= 360.0f;
+                
+    gf_angular_speed_y *= FRICTION;
+    if (fabs (gf_angular_speed_y) < FRICTION_LIMIT)
+        gf_angular_speed_y = 0.0f;
+}
+
+static void render (void)
+{
+    renderPlasma ();
+
+    // setup matrices
+    sceGumMatrixMode (GU_PROJECTION);
+    sceGumLoadIdentity ();
+    sceGumPerspective (30.0f, 16.0f/9.0f, 0.5f, 1000.0f);
+
+    sceGumMatrixMode (GU_VIEW);
+    sceGumLoadIdentity ();
+    
+    sfxProcess (sfx1);
+    sfxProcess (sfx2);
+    cameraRotateAroundOrigin (g_camera, gf_camera_theta, gf_camera_phi);
+    
+    cameraLook (g_camera);
+
+    sfxProcess (sfx_cube);
+    rotation_update ();
+    
+    sceGumMatrixMode (GU_MODEL);
+    sceGumLoadIdentity ();
+
+    sceGumRotateY (gf_cube_spin_y * GU_PI / 180.0);
+    sceGumPushMatrix ();
+    sceGumRotateZ (gf_cube_spin_z * GU_PI / 180.0);
+    sceGumPushMatrix ();
+    sceGumRotateX (gf_cube_spin_x * GU_PI / 180.0); 
+      
+    // draw cube
+    cubeRender ();
+    
+    sceGumPopMatrix ();
+    sceGumPopMatrix ();
+
+    sfxProcess (sfx_stars);
+    if (!sfx_stars->completed)
+    {
+        int i;
+        
+        sceGuDisable (GU_DEPTH_TEST);
+        sceGuBlendFunc (GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+        sceGuEnable(GU_BLEND);
+        
+        sceGuTexMode (GU_PSM_4444, 0, 0, 1);
+        sceGuTexImage (0, 512, 64, 512, stars_start);
+        sceGuTexFunc (GU_TFX_MODULATE, GU_TCC_RGBA);
+        sceGuTexFilter (GU_NEAREST, GU_NEAREST);
+    
+        for (i = 0; i < 12; i++)
+        {
+            int x, y, r;
+            u32 color = gi_stars_alpha << 24 | 0x00ffffff;
+            
+            r = 256 - ((float)gi_stars_alpha / 16.0f) * ((float)gi_stars_alpha / 16.0f);
+            x = gi_stars_x + r * cosf ((i * 30.0f) * GU_PI / 180.0f);
+            y = gi_stars_y + r * sinf ((i * 30.0f) * GU_PI / 180.0f);
+            
+            blit (40 * (((int)(i * 30) % 72) / 6), 0, 40, 40, x - 20, y - 20, color);
+        }
+
+        sceGuEnable (GU_DEPTH_TEST);
+        sceGuDisable(GU_BLEND);
+    }
+
+    sfxProcess (sfx_message);    
+
+    if (!sfx_message->completed || !gi_game_in_progress)
+    { 
+        sceGuDisable (GU_DEPTH_TEST);
+        sceGuBlendFunc (GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+        sceGuEnable(GU_BLEND);
+
+        sceGuTexMode (GU_PSM_4444, 0, 0, 1);
+        sceGuTexImage (0, 256, 128, 256, font_start);
+        sceGuTexFunc (GU_TFX_MODULATE, GU_TCC_RGBA);
+        sceGuTexFilter (GU_NEAREST, GU_LINEAR);
+
+        printEndMessage (gi_message_anim);
+        
+        sceGuEnable (GU_DEPTH_TEST);
+        sceGuDisable(GU_BLEND);
+    }
+
+    // Display OSD at the top of the screen
+    if (gi_show_osd)
+    {
+        int sec, min, hour, run_time;
+        char buffer [10];
+        static int time_blink_counter = 0;;
+            
+        // Local static var to make the time dispay blink at the end of a game        
+        time_blink_counter++;
+
+        sceGuDisable (GU_TEXTURE_2D);
+        sceGuDisable (GU_DEPTH_TEST);
+        sceGuBlendFunc (GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+        sceGuEnable(GU_BLEND);
+
+        drawRectangle (0, 0, 480, 10, 0x80000000);
+
+        sceGuEnable (GU_TEXTURE_2D);     
+
+        if (gi_game_in_progress)
+            run_time = game_duration + difftime (time (NULL), last_start_time);
+        else
+            run_time = game_duration;
+        // Format time nicely H:MM:SS    
+        sec = run_time % 60;
+        min = (run_time / 60) % 60;
+        hour = run_time / 3600;
+        sprintf (buffer, "%d:%02d:%02d", hour, min, sec); 
+    
+        // Display title in the upper left corner    
+        printTextAt (0, 1, "the_cube v1.1", 0xffffffff, 0);
+        // Display time in the upper right corner (continuously in game, and blinking otherwise)
+        if (gi_game_in_progress || (time_blink_counter % 20 < 10)) 
+            printTextAt (480 - 8 * 8, 1, buffer, 0xffffffff, 0);
+
+        sceGuEnable (GU_DEPTH_TEST);
+        sceGuDisable(GU_BLEND);
+    }
+
+    sfxProcess (sfx_message2);
+    // Display message in the lower part of the screen
+    if (gi_msg_y < 272)
+    {
+        sceGuDisable (GU_TEXTURE_2D);
+        sceGuDisable (GU_DEPTH_TEST);
+        sceGuBlendFunc (GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+        sceGuEnable(GU_BLEND);
+
+        drawRectangle (0, gi_msg_y, 480, 272, 0x80000000);
+
+        sceGuEnable (GU_TEXTURE_2D);     
+
+        printTextAt (0, gi_msg_y + 1, gpc_msg, 0xffffffff, 0); 
+
+        sceGuEnable (GU_DEPTH_TEST);
+        sceGuDisable(GU_BLEND);
+    }
+}
+
+static void on_enter (void)
+{
+    gi_controls_enabled= -1;
+    
+    last_start_time = time (NULL);
+    cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+}
+
+static void init (void)
+{
+    gi_msg_y = 272;
+    
+    gi_spin_started = 0;
+    gi_current_cursor_axis = 4;    // Y
+    gi_current_cursor_pos = 2;     // TOP
+
+    // Cube rotation variables
+    gf_angular_speed_y = 0.0f;
+    gf_cube_spin_y = 50.0f;
+    
+    // Init camera
+    g_camera = cameraInit ();
+    ScePspFVector3 vView = {0, 0, 0};
+    ScePspFVector3 vUpVector = {0, 1, 0};
+    ScePspFVector3 vPosition = {100, 0, 0};
+    cameraPosition (g_camera, &vPosition, &vView, &vUpVector);
+
+    gf_camera_phi = 90.0f;
+    gf_camera_theta = 0.0f;
+    cameraRotateAroundOrigin (g_camera, gf_camera_theta, gf_camera_phi);    
+
+    sfx1 = sfxNew ();
+    sfx2 = sfxNew ();
+    sfx_cube = sfxNew ();
+    sfx_stars = sfxNew ();
+    sfx_message = sfxNew ();
+    sfx_message2 = sfxNew ();
+    
+    if (gameLoadFromFile ("game.sav") != 0)
+    {
+        // reinit game duration
+        game_duration = 0;
+        // create new cube
+        cubeInit ();
+        // set global var for game status
+        gi_game_in_progress = 0;
+    }
+    else
+    {
+        gi_game_in_progress = -1;
+    }
+        
+    cubeSelectFace (cursor_axis[gi_current_cursor_axis][gi_current_cursor_pos]);
+
+    // Cube geometry updated
+    sceKernelDcacheWritebackAll ();    
+}
+
+static void dispose (void)
+{
+    // Save current game
+    gameSaveToFile ("game.sav");
+
+    // Free cube
+    cubeDispose ();
+    
+    // Free camera
+    cameraDispose (g_camera);
+
+    sfx1 = sfxFree (sfx1);
+    sfx2 = sfxFree (sfx2);
+    sfx_cube = sfxFree (sfx_cube);
+    sfx_stars = sfxFree (sfx_stars);
+    sfx_message = sfxFree (sfx_message);
+    sfx_message2 = sfxFree (sfx_message2);
+}
+
+/******************************* EXPORTED FUNCTIONS **********************************/
+
+int gameLoadFromFile (char *filename)
+{
+    SceUID fileHandle;
+    int size_header, size_cube;
+    game_sav_t game_sav;
+    serialized_cube_t serialized_cube;
+
+    fileHandle = sceIoOpen (filename, PSP_O_RDONLY, 0777);
+    
+    if (fileHandle < 0)
+        return -1;
+
+    size_header = sceIoRead (fileHandle, &game_sav, sizeof(game_sav_t));
+
+    if ((game_sav.header[0] != 'C') ||
+        (game_sav.header[1] != 'U') ||
+        (game_sav.header[2] != 'B') ||
+        (game_sav.header[3] != '1'))
+    {
+        sceIoClose (fileHandle);
+        return -3;
+    }
+    
+    size_cube = sceIoRead (fileHandle, &serialized_cube, sizeof(serialized_cube_t));
+    
+    sceIoClose (fileHandle);
+
+    if (size_header != sizeof (game_sav_t))
+         return -2;
+    if (size_cube != sizeof (serialized_cube_t))
+         return -2;
+
+    cubeDeserialize (&serialized_cube);
+    game_duration = game_sav.duration;
+    
+    return 0;   
+}
+
+void gameSaveToFile (char *filename)
+{
+    SceUID fileHandle;
+    game_sav_t game_sav;
+    serialized_cube_t serialized_cube;
+    
+    fileHandle = sceIoOpen (filename, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0777);
+    
+    if (fileHandle < 0)
+        return;
+
+    if (gi_game_in_progress)
+    {
+        cubeSerialize (&serialized_cube);
+        
+        game_sav.header[0] = 'C';
+        game_sav.header[1] = 'U';
+        game_sav.header[2] = 'B';
+        game_sav.header[3] = '1';
+        game_sav.duration = game_duration;
+        
+        sceIoWrite (fileHandle, &game_sav, sizeof (game_sav_t));
+        sceIoWrite (fileHandle, &serialized_cube, sizeof (serialized_cube_t));
+    }    
+    sceIoClose (fileHandle);
+}
+
+void gameStart (void)
+{
+    // Destroy current cube
+    cubeDispose ();
+
+    // Create new cube
+    cubeInit ();
+
+    // 30 random spins should be enough
+    gi_cube_mix = 30;
+    cubeSetSpinSpeed (15.0f);
+
+    // reinit game duration
+    game_duration = 0;
+    gi_game_in_progress = -1;
+    gi_free_move = 0;
+    
+    // display wait msg
+    strcpy (gpc_msg, "please wait...");
+    sfxSet (sfx_message2, 272, 262, 10, SFX_LINEAR, sfxProcessSetInt, NULL, &gi_msg_y);
+}
+
+void gameNew (screen_t *new)
+{
+    new->Init = init;
+    new->Dispose = dispose;
+    new->Render = render;
+    new->Controls = controls;
+    new->OnEnter = on_enter;
+}
+

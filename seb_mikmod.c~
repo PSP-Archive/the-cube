@@ -1,0 +1,149 @@
+/*
+    SEB MikMod encapsulation
+    seb_mikmod.c
+*/
+
+#include "common.h"
+#include "seb_mikmod.h"
+
+static int si_done = 0;
+static int si_thread_id = -1;
+static MODULE *sm_mod = NULL;
+static int  si_initialized = false;
+
+extern int _mm_errno;
+extern BOOL _mm_critical;
+extern char *_mm_errmsg[];
+
+void smm_error_handler (void)
+{
+	pspDebugScreenPrintf ("_mm_critical %d\n", MikMod_critical);
+	pspDebugScreenPrintf ("_mm_errno %d\n", MikMod_errno);
+	pspDebugScreenPrintf ("%s\n", MikMod_strerror(MikMod_errno));
+
+	return;
+}
+
+static int smm_audio_channel_thread (int args, void *argp)
+{
+    while (!si_done)
+    {
+        MikMod_Update ();
+        sceKernelDelayThread (1);
+    }
+    return (0);
+}
+
+int SMM_Init (void) 
+{
+    if (si_initialized == true)
+    {
+        pspDebugScreenPrintf ("MikMod already initialized\n");
+        return 1;
+    }
+
+	if (MikMod_InitThreads ())
+    {
+        pspDebugScreenPrintf ("MikMod thread init failed\n");
+        return -1;
+    }
+	MikMod_RegisterErrorHandler (smm_error_handler);
+    MikMod_RegisterAllDrivers ();
+    MikMod_RegisterAllLoaders ();
+
+    /* initialize the library */
+	md_mode = DMODE_16BITS | DMODE_STEREO | DMODE_SOFT_SNDFX | DMODE_SOFT_MUSIC; 
+	md_reverb = 0;
+	md_pansep = 128;
+    if (MikMod_Init (""))
+    {
+        pspDebugScreenPrintf ("Could not initialize sound, reason: %s\n", MikMod_strerror (MikMod_errno));
+        return -2;
+    }
+  
+    MikMod_SetNumVoices (-1, 8);
+	/* get ready to play */
+    MikMod_EnableOutput ();
+
+    si_initialized = true;
+    return 0;
+}
+
+int SMM_PlayMOD (char *pc_file_name)
+{
+    if (si_initialized == false)
+    {
+        //pspDebugScreenPrintf ("MikMod library not initialized\n");
+        return -1;
+    }
+
+    // create mikmod update thread
+    if ((si_thread_id = sceKernelCreateThread ("MikMod", (void*)&smm_audio_channel_thread, 0x12, 0x10000, 0, NULL)) > 0)
+    {
+        sceKernelStartThread (si_thread_id, 0 , NULL);
+    }
+    else
+    {
+        //pspDebugScreenPrintf ("Play thread create failed!\n");
+        return -2;
+    }
+    
+    // max_chan is hardcoded to 128
+    sm_mod = Player_Load (pc_file_name, 128, 0);
+    if (sm_mod != NULL)
+    {
+        sm_mod->wrap = 1;
+        Player_Start (sm_mod);
+    }
+    else
+    {
+        pspDebugScreenPrintf ("Loading MOD file %s failed!\n", pc_file_name);
+        return -3;
+    }
+    return 0;
+}
+
+void SMM_Stop (void)
+{
+    if (si_initialized == false)
+    {
+        pspDebugScreenPrintf ("MikMod library not initialized\n");
+        return;
+    }
+
+    // allow audio thread to terminate cleanly
+    si_done = true;
+    if (si_thread_id > 0)
+    {
+        SceUInt timeout = 100000;
+        sceKernelWaitThreadEnd (si_thread_id, &timeout);
+        // not 100% sure if this is necessary after a clean exit, but just to make sure any resources are freed:
+        sceKernelDeleteThread (si_thread_id);
+    }
+    if (sm_mod != NULL)
+    {
+	    Player_Stop ();
+	    Player_Free (sm_mod);
+    }
+
+    si_done = 0;
+    si_thread_id = -1;
+    sm_mod = NULL;
+}
+
+void SMM_Dispose (void)
+{
+    if (si_initialized == false)
+    {
+        pspDebugScreenPrintf ("MikMod library not initialized\n");
+        return;
+    }
+
+    if (sm_mod != NULL)
+    {
+        SMM_Stop ();
+    }
+	MikMod_Exit ();
+    si_initialized = false;
+}
+

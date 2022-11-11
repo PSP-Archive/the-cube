@@ -1,0 +1,213 @@
+/*
+    music.c
+
+    Copyright 2007 Sebastien Delestaing
+    
+    This file is part of "the_cube".
+
+    "the_cube" is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    "the_cube" is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+/************************************ INCLUDES ***************************************/
+
+#include "common.h"
+#include "music.h"
+#include "psp_mreader.h"
+
+/********************************* EXTERNAL VARS *************************************/
+
+extern int _mm_errno;
+extern BOOL _mm_critical;
+extern char *_mm_errmsg[];
+
+/************************************* STATICS ***************************************/
+
+static int si_done = 0;
+static int si_thread_id = -1;
+static MODULE *mod = NULL;
+static int  si_initialized = false;
+static MREADER *my_mreader = NULL;
+
+/********************************* LOCAL FUNCTIONS ***********************************/
+
+void music_error_handler (void)
+{
+    pspDebugScreenPrintf ("_mm_critical %d\n", MikMod_critical);
+    pspDebugScreenPrintf ("_mm_errno %d\n", MikMod_errno);
+    pspDebugScreenPrintf ("%s\n", MikMod_strerror(MikMod_errno));
+
+    return;
+}
+
+static int music_audio_channel_thread (int args, void *argp)
+{
+    while (!si_done)
+    {
+        MikMod_Update ();
+        sceKernelDelayThread (1);
+    }
+    return (0);
+}
+
+/******************************* EXPORTED FUNCTIONS **********************************/
+
+int musicInit (void) 
+{
+    if (si_initialized == true)
+    {
+        pspDebugScreenPrintf ("MikMod already initialized\n");
+        return 1;
+    }
+
+    if (MikMod_InitThreads ())
+    {
+        pspDebugScreenPrintf ("MikMod thread init failed\n");
+        return -1;
+    }
+    MikMod_RegisterErrorHandler (music_error_handler);
+    MikMod_RegisterAllDrivers ();
+    MikMod_RegisterAllLoaders ();
+
+    /* initialize the library */
+    md_mode = DMODE_16BITS | DMODE_STEREO | DMODE_SOFT_SNDFX | DMODE_SOFT_MUSIC; 
+    md_reverb = 0;
+    md_pansep = 128;
+    if (MikMod_Init (""))
+    {
+        pspDebugScreenPrintf ("Could not initialize sound, reason: %s\n", MikMod_strerror (MikMod_errno));
+        return -2;
+    }
+  
+    MikMod_SetNumVoices (-1, 8);
+    /* get ready to play */
+    MikMod_EnableOutput ();
+
+    si_initialized = true;
+    return 0;
+}
+
+int musicPlayMODFromMemory (unsigned char *pc_mod_start, unsigned char *pc_mod_end)
+{
+    if (si_initialized == false)
+        return -1;
+
+    // create mikmod update thread
+    if ((si_thread_id = sceKernelCreateThread ("MikMod", (void*)&music_audio_channel_thread, 0x12, 0x10000, 0, NULL)) > 0)
+    {
+        sceKernelStartThread (si_thread_id, 0 , NULL);
+    }
+    else
+        return -2;
+
+    // create PSP memory reader (pass the mod buffer as argument)
+    my_mreader = psp_mreader_new (pc_mod_start, pc_mod_end);
+    if (my_mreader == NULL)
+    {
+        pspDebugScreenPrintf ("could not create mreader\n");
+        return -3;
+    }    
+
+    mod = Player_LoadGeneric (my_mreader, 128, 0);
+    if (mod != NULL)
+    {
+        mod->wrap = 1;
+        Player_Start (mod);
+    }
+    else
+    {
+        pspDebugScreenPrintf ("could not play (generic)\n");
+        return -4;
+    }
+    
+    return 0;
+}
+
+int musicPlayMODFromFile (char *pc_file_name)
+{
+    if (si_initialized == false)
+    {
+        //pspDebugScreenPrintf ("MikMod library not initialized\n");
+        return -1;
+    }
+
+    // create mikmod update thread
+    if ((si_thread_id = sceKernelCreateThread ("MikMod", (void*)&music_audio_channel_thread, 0x12, 0x10000, 0, NULL)) > 0)
+    {
+        sceKernelStartThread (si_thread_id, 0 , NULL);
+    }
+    else
+    {
+        //pspDebugScreenPrintf ("Play thread create failed!\n");
+        return -2;
+    }
+    
+    // max_chan is hardcoded to 128
+    mod = Player_Load (pc_file_name, 128, 0);
+    if (mod != NULL)
+    {
+        mod->wrap = 1;
+        Player_Start (mod);
+    }
+    else
+    {
+        //pspDebugScreenPrintf ("Loading MOD file %s failed!\n", pc_file_name);
+        return -3;
+    }
+    return 0;
+}
+
+void musicStop (void)
+{
+    if (si_initialized == false)
+    {
+        pspDebugScreenPrintf ("MikMod library not initialized\n");
+        return;
+    }
+
+    // allow audio thread to terminate cleanly
+    si_done = true;
+    if (si_thread_id > 0)
+    {
+        SceUInt timeout = 100000;
+        sceKernelWaitThreadEnd (si_thread_id, &timeout);
+        // not 100% sure if this is necessary after a clean exit, but just to make sure any resources are freed:
+        sceKernelDeleteThread (si_thread_id);
+    }
+    if (mod != NULL)
+    {
+        Player_Stop ();
+        Player_Free (mod);
+        psp_mreader_free (my_mreader);
+    }
+
+    si_done = 0;
+    si_thread_id = -1;
+    mod = NULL;
+}
+
+void musicDispose (void)
+{
+    if (si_initialized == false)
+    {
+        pspDebugScreenPrintf ("MikMod library not initialized\n");
+        return;
+    }
+
+    if (mod != NULL)
+    {
+        musicStop ();
+    }
+    MikMod_Exit ();
+    si_initialized = false;
+}
+

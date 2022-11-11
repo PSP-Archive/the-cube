@@ -1,0 +1,101 @@
+/*
+    SEB Common utilities and macros
+    seb_common.c
+*/
+
+#include "seb_common.h"
+
+// global list, for every potential render function
+unsigned int __attribute__((aligned(16))) list[262144];
+
+// Frame Counter variables
+static float sf_curr_ms;
+static u64 su64_last_tick;
+static u32 su32_tick_frequency;
+static int si_frame_count;
+
+struct Vertex
+{
+	unsigned short u, v;
+	unsigned short color;
+	short x, y, z;
+};
+
+void SFC_Init (void)
+{
+    sf_curr_ms = 1.0f;
+	sceRtcGetCurrentTick (&su64_last_tick);
+	su32_tick_frequency = sceRtcGetTickResolution();
+	si_frame_count = 0;
+}
+
+void SFC_UpdateFrameCounter (void)
+{
+	u64 u64_curr_tick;
+
+	++si_frame_count;
+	sceRtcGetCurrentTick (&u64_curr_tick);
+	if ((u32)(u64_curr_tick - su64_last_tick) >= su32_tick_frequency)
+	{
+		float time_span = ((int)(u64_curr_tick - su64_last_tick)) / (float)su32_tick_frequency;
+		sf_curr_ms = time_span / si_frame_count;
+		si_frame_count = 0;
+		sceRtcGetCurrentTick (&su64_last_tick);
+	}
+}
+
+float SFC_GetCurrentFPS (void)
+{
+    return 1.0f / sf_curr_ms;
+}
+
+void SEB_WaitForKey (int key)
+{
+	SceCtrlData oldPad, pad;
+    int done = 0;
+
+	oldPad.Buttons = 0;
+
+	while ((!done || pad.Buttons != 0) && running ())
+	{
+		if (sceCtrlPeekBufferPositive (&pad, 1))
+		{
+			if (pad.Buttons != oldPad.Buttons)
+			{
+				if(pad.Buttons & key)
+                {
+                    done = -1;
+                }
+			}
+			oldPad = pad;
+		}
+        sceDisplayWaitVblankStart();
+    }
+}
+
+// blit maximizing the use of the texture-cache
+void SEB_OptimizedBlit (int sx, int sy, int sw, int sh, int dx, int dy, int slice)
+{
+	int start, end;
+
+	for (start = sx, end = sx+sw; start < end; start += slice, dx += slice)
+	{
+		struct Vertex* vertices = (struct Vertex*)sceGuGetMemory(2 * sizeof(struct Vertex));
+		int width = (start + slice) < end ? slice : end-start;
+
+		vertices[0].u = start; vertices[0].v = sy;
+		vertices[0].color = 0xffff;
+		vertices[0].x = dx; vertices[0].y = dy; vertices[0].z = 0;
+
+		vertices[1].u = start + width; vertices[1].v = sy + sh;
+		vertices[1].color = 0;
+		vertices[1].x = dx + width; vertices[1].y = dy + sh; vertices[1].z = 0;
+
+		sceGuDrawArray (GU_SPRITES, GU_TEXTURE_16BIT | GU_COLOR_4444 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, vertices);
+	}
+}
+
+
+
+
+

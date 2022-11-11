@@ -1,0 +1,33 @@
+
+void SRC_Init (void)
+{
+	int i;
+	for(i=0;i<27;i++)
+		Pieces[i] = new CubePiece;
+
+	int Ts[6];
+	Ts[0] = 0;
+	Ts[1] = 1;
+	Ts[2] = 2;
+	Ts[3] = 3;
+	Ts[4] = 4;
+	Ts[5] = 5;
+
+	int x,y,z,CubeIndex=0;
+	for(x=-1;x<2;x++)
+		for(y=1;y>=-1;y--)
+			for(z=-1;z<2;z++)
+			{
+				float Scale = 0.5f;
+				Pieces[CubeIndex]->Init(GD, Ts);
+				Pieces[CubeIndex]->Position = D3DXVECTOR3(x*Scale,y*Scale,z*Scale);
+				Pieces[CubeIndex]->PieceIndex = CubeIndex;
+
+				CubeIndex++;
+			}
+
+	InitMoveList();
+	AmSpinning = false;
+	MoveListActive = false;
+}
+
